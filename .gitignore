@@ -1,0 +1,28 @@
+node_modules/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Prisma
+/src/generated/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+CLAUDE.md
+.claude/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker volumes
+pgdata/

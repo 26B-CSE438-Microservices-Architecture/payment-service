@@ -1,0 +1,36 @@
+{
+  "name": "microservices-payment",
+  "version": "1.0.0",
+  "description": "Handles payment lifecycle operations for the Trendyol clone platform. This service processes card payments via a third-party provider and publishes payment state changes as events for other services to consume.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "worker": "node src/worker/index.js",
+    "migrate": "npx prisma migrate dev",
+    "migrate:deploy": "npx prisma migrate deploy",
+    "generate": "npx prisma generate",
+    "studio": "npx prisma studio",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/26B-CSE438-Microservices-Architecture/payment-service.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/26B-CSE438-Microservices-Architecture/payment-service/issues"
+  },
+  "homepage": "https://github.com/26B-CSE438-Microservices-Architecture/payment-service#readme",
+  "dependencies": {
+    "@prisma/client": "^6.19.2",
+    "cors": "^2.8.6",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "dotenv": "^17.3.1",
+    "prisma": "^6.19.2"
+  }
+}

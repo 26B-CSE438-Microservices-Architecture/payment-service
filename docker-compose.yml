@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: payment
+      POSTGRES_PASSWORD: payment123
+      POSTGRES_DB: payment_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build: .
+    command: sh -c "npx prisma migrate deploy && node src/index.js"
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://payment:payment123@postgres:5432/payment_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      PAYMENT_PROVIDER: mock
+      PORT: 3000
+    depends_on:
+      - postgres
+
+  worker:
+    build: .
+    command: node src/worker/index.js
+    environment:
+      DATABASE_URL: postgresql://payment:payment123@postgres:5432/payment_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      PAYMENT_PROVIDER: mock
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
