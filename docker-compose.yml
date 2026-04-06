@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
-  postgres:
+  payment-postgres:
     image: postgres:16-alpine
+    container_name: payment-postgres
     environment:
       POSTGRES_USER: payment
       POSTGRES_PASSWORD: payment123
@@ -10,30 +9,76 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - payment-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment -d payment_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
-  api:
+  payment-rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: payment-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: payment
+      RABBITMQ_DEFAULT_PASS: payment123
+    volumes:
+      - payment-rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  payment-api:
     build: .
+    container_name: payment-api
     command: sh -c "npx prisma migrate deploy && node src/index.js"
     ports:
       - "3000:3000"
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql://payment:payment123@postgres:5432/payment_db
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      PAYMENT_PROVIDER: mock
-      PORT: 3000
+      # Infrastructure — container networking overrides
+      DATABASE_URL: postgresql://payment:payment123@payment-postgres:5432/payment_db
+      RABBITMQ_URL: amqp://payment:payment123@payment-rabbitmq:5672
     depends_on:
-      - postgres
+      payment-postgres:
+        condition: service_healthy
+      payment-rabbitmq:
+        condition: service_healthy
 
-  worker:
+  payment-worker:
     build: .
+    container_name: payment-worker
     command: node src/worker/index.js
+    env_file: .env
     environment:
-      DATABASE_URL: postgresql://payment:payment123@postgres:5432/payment_db
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      PAYMENT_PROVIDER: mock
+      DATABASE_URL: postgresql://payment:payment123@payment-postgres:5432/payment_db
+      RABBITMQ_URL: amqp://payment:payment123@payment-rabbitmq:5672
     depends_on:
-      - api
+      payment-api:
+        condition: service_started
+
+  payment-simulator:
+    build:
+      context: .
+      dockerfile: simulators/order-simulator/Dockerfile
+    container_name: payment-simulator
+    ports:
+      - "3002:3002"
+    env_file: .env
+    environment:
+      PAYMENT_API_URL: http://payment-api:3000
+      RABBITMQ_URL: amqp://payment:payment123@payment-rabbitmq:5672
+    depends_on:
+      payment-api:
+        condition: service_started
+      payment-rabbitmq:
+        condition: service_healthy
 
 volumes:
-  pgdata:
+  payment-pgdata:
+  payment-rabbitmq-data:

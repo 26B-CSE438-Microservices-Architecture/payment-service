@@ -9,6 +9,7 @@ COPY prisma/ ./prisma/
 RUN npx prisma generate
 
 COPY src/ ./src/
+COPY simulators/ ./simulators/
 
 EXPOSE 3000
 
