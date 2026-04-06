@@ -1,18 +1,20 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../../lib/prisma');
+const publisher = require('../../queue/publisher');
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.get('/', async (req, res) => {
-  const checks = { db: false };
+  const checks = { db: false, rabbitmq: false };
 
   try {
     await prisma.$queryRaw`SELECT 1`;
     checks.db = true;
   } catch {}
 
-  const healthy = checks.db;
+  checks.rabbitmq = publisher.isConnected();
+
+  const healthy = checks.db && checks.rabbitmq;
 
   res.status(healthy ? 200 : 503).json({
     status: healthy ? 'ok' : 'degraded',
