@@ -8,23 +8,25 @@ datasource db {
 }
 
 model Payment {
-  id             String   @id @db.VarChar(20)
-  idempotencyKey String   @unique @map("idempotency_key") @db.VarChar(100)
-  orderId        String   @map("order_id") @db.VarChar(50)
-  userId         String   @map("user_id") @db.VarChar(50)
-  amount         Int
-  currency       String   @default("TRY") @db.VarChar(3)
-  method         String   @default("card") @db.VarChar(20)
-  status         String   @db.VarChar(20)
-  provider       String?  @db.VarChar(20)
-  providerTxId   String?  @map("provider_tx_id") @db.VarChar(100)
-  failureReason  String?  @map("failure_reason")
-  metadata       Json?
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  authorizedAt   DateTime? @map("authorized_at") @db.Timestamptz()
-  capturedAt     DateTime? @map("captured_at") @db.Timestamptz()
-  cancelledAt    DateTime? @map("cancelled_at") @db.Timestamptz()
-  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+  id                  String   @id @db.VarChar(50)
+  idempotencyKey      String   @unique @map("idempotency_key") @db.VarChar(100)
+  orderId             String   @map("order_id") @db.VarChar(50)
+  userId              String   @map("user_id") @db.VarChar(50)
+  amount              Int
+  currency            String   @default("TRY") @db.VarChar(3)
+  method              String   @default("card") @db.VarChar(20)
+  status              String   @db.VarChar(20)
+  provider            String?  @db.VarChar(20)
+  providerTxId        String?  @map("provider_tx_id") @db.VarChar(100)
+  failureReason       String?  @map("failure_reason")
+  threeDSSessionToken String?  @map("three_ds_session_token")
+  cancelReason        String?  @map("cancel_reason")
+  metadata            Json?
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  authorizedAt        DateTime? @map("authorized_at") @db.Timestamptz()
+  capturedAt          DateTime? @map("captured_at") @db.Timestamptz()
+  cancelledAt         DateTime? @map("cancelled_at") @db.Timestamptz()
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
 
   events PaymentEvent[]
 
@@ -35,7 +37,7 @@ model Payment {
 
 model PaymentEvent {
   id          Int      @id @default(autoincrement())
-  paymentId   String   @map("payment_id") @db.VarChar(20)
+  paymentId   String   @map("payment_id") @db.VarChar(50)
   fromStatus  String?  @map("from_status") @db.VarChar(20)
   toStatus    String   @map("to_status") @db.VarChar(20)
   triggeredBy String?  @map("triggered_by") @db.VarChar(50)
@@ -46,4 +48,21 @@ model PaymentEvent {
 
   @@index([paymentId], map: "idx_payment_events_payment_id")
   @@map("payment_events")
+}
+
+model SavedCard {
+  id              String   @id @db.VarChar(50)
+  userId          String   @map("user_id") @db.VarChar(50)
+  cardUserKey     String   @map("card_user_key") @db.VarChar(100)
+  cardToken       String   @map("card_token") @db.VarChar(100)
+  last4           String   @db.VarChar(4)
+  cardType        String?  @map("card_type") @db.VarChar(20)
+  cardAssociation String?  @map("card_association") @db.VarChar(20)
+  cardBankName    String?  @map("card_bank_name") @db.VarChar(100)
+  cardAlias       String?  @map("card_alias") @db.VarChar(100)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@unique([userId, cardToken], map: "uq_saved_cards_user_token")
+  @@index([userId], map: "idx_saved_cards_user_id")
+  @@map("saved_cards")
 }
