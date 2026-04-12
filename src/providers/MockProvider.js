@@ -1,71 +1,75 @@
 const { v4: uuidv4 } = require('uuid');
-const config = require('../config');
 
 class MockProvider {
   constructor() {
     this.cardStore = new Map(); // cardUserKey -> [{ cardToken, last4, ... }]
+    this.formSessions = new Map(); // token -> session data (for CF and card storage)
   }
 
-  async authorize({ amount, currency, card, buyer, items, paymentId, callbackUrl, registerCard }) {
+  async authorize({ amount, currency, card, buyer, items, paymentId }) {
     await this._delay(50);
 
-    // Determine test card number — support raw card, saved card token, or old token format
-    const testId = card.cardNumber || card.cardToken || card.token || '';
+    // Saved-card path only — raw card details are never accepted
+    const testId = card.cardToken || card.token || '';
 
-    // Special test cards/tokens for simulating failures
-    if (testId === 'tok_decline' || testId === '4111111111111129') {
-      return { type: 'direct', success: false, failureReason: 'card_declined' };
+    // Special test tokens for simulating failures
+    if (testId === 'tok_decline') {
+      return { success: false, failureReason: 'card_declined' };
     }
-    if (testId === 'tok_insufficient' || testId === '4111111111111111') {
-      return { type: 'direct', success: false, failureReason: 'insufficient_funds' };
+    if (testId === 'tok_insufficient') {
+      return { success: false, failureReason: 'insufficient_funds' };
     }
-    if (testId === 'tok_expired' || testId === '4111111111111100') {
-      return { type: 'direct', success: false, failureReason: 'card_expired' };
+    if (testId === 'tok_expired') {
+      return { success: false, failureReason: 'card_expired' };
     }
     if (testId === 'tok_error') {
       throw new Error('Provider unavailable');
     }
 
     const mockTxId = `mock_tx_${uuidv4()}`;
-    const mockItemTransactions = (items && items.length > 0)
-      ? items.map((item, i) => ({
-          itemId: item.id || `ITEM_${i}`,
-          paymentTransactionId: `mock_txn_${uuidv4()}`,
-          price: String(item.price || item.amount || 0),
-        }))
-      : [{
-          itemId: 'ITEM_DEFAULT',
-          paymentTransactionId: `mock_txn_${uuidv4()}`,
-          price: String(amount),
-        }];
+    const mockItemTransactions = this._buildMockItemTransactions(items, amount);
 
-    // 3DS flow
-    if (config.payment3dsEnabled) {
-      // Special token/card to skip 3DS even when enabled
-      if (testId === 'tok_no3ds') {
-        return {
-          type: 'direct',
-          success: true,
-          providerTxId: mockTxId,
-          itemTransactions: mockItemTransactions,
-        };
-      }
+    return {
+      success: true,
+      providerTxId: mockTxId,
+      itemTransactions: mockItemTransactions,
+    };
+  }
 
-      // Return 3DS redirect (matches iyzico's response shape)
-      const amountDisplay = (amount / 100).toFixed(2);
-      const mockHtml = Buffer.from(`<!DOCTYPE html>
+  async initCheckoutForm({ paymentId, amount, currency, buyer, items, callbackUrl }) {
+    await this._delay(50);
+
+    const token = `mock_cf_${uuidv4()}`;
+    this.formSessions.set(token, {
+      type: 'payment',
+      paymentId,
+      amount,
+      items,
+      callbackUrl,
+    });
+
+    const amountDisplay = (amount / 100).toFixed(2);
+    const mockHtml = Buffer.from(`<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,sans-serif;background:#1e293b;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{background:#fff;border-radius:12px;padding:32px;width:380px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.card{background:#fff;border-radius:12px;padding:32px;width:420px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
 .logo{font-size:20px;font-weight:700;color:#1e40af;margin-bottom:4px}
-.sub{color:#64748b;font-size:13px;margin-bottom:20px}
-.amount{font-size:32px;font-weight:700;margin:16px 0}
-.info{font-size:13px;color:#475569;background:#f1f5f9;padding:12px;border-radius:8px;margin-bottom:16px;line-height:1.5}
-.sms{width:160px;text-align:center;font-size:24px;letter-spacing:8px;padding:10px;border:2px solid #cbd5e1;border-radius:8px;margin:0 auto 20px;display:block}
-.sms:focus{border-color:#2563eb;outline:none}
-.actions{display:flex;gap:10px}
+.sub{color:#64748b;font-size:13px;margin-bottom:16px}
+.amount{font-size:32px;font-weight:700;margin:12px 0}
+.field{text-align:left;margin-bottom:12px}
+.field label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:4px}
+.field input{width:100%;padding:10px;border:2px solid #cbd5e1;border-radius:8px;font-size:14px}
+.field input:focus{border-color:#2563eb;outline:none}
+.row{display:flex;gap:10px}
+.row .field{flex:1}
+.check{display:flex;align-items:center;gap:8px;margin:12px 0;font-size:13px;color:#475569}
+.check input{width:16px;height:16px}
+.presets{margin:12px 0;display:flex;flex-wrap:wrap;gap:6px;justify-content:center}
+.presets button{padding:4px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;font-size:11px;cursor:pointer;color:#475569}
+.presets button:hover{background:#e2e8f0}
+.actions{display:flex;gap:10px;margin-top:16px}
 .actions button{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
 .btn-ok{background:#16a34a;color:#fff}
 .btn-ok:hover{background:#15803d}
@@ -73,81 +77,219 @@ body{font-family:system-ui,sans-serif;background:#1e293b;display:flex;justify-co
 .btn-no:hover{background:#b91c1c}
 </style></head><body>
 <div class="card">
-<div class="logo">3D Secure Verification</div>
-<div class="sub">Your bank requires additional verification</div>
+<div class="logo">iyzico Checkout Form</div>
+<div class="sub">Mock Payment Gateway</div>
 <div class="amount">${amountDisplay} TRY</div>
-<div class="info">A verification code has been sent to your phone ending in **42.<br>Enter the code below to confirm this payment.</div>
-<input class="sms" type="text" maxlength="6" value="123456">
+<div class="presets">
+<button onclick="fillCard('5528790000000008','12','2030','123','Test User')">Halkbank MC (OK)</button>
+<button onclick="fillCard('4111111111111129','12','2030','123','Test User')">Declined</button>
+<button onclick="fillCard('4111111111111111','12','2030','123','Test User')">Insufficient</button>
+<button onclick="fillCard('4111111111111100','12','2030','123','Test User')">Expired</button>
+</div>
+<div class="field"><label>Card Number</label><input id="cn" type="text" maxlength="19" placeholder="5528 7900 0000 0008"></div>
+<div class="row">
+<div class="field"><label>Month</label><input id="em" type="text" maxlength="2" placeholder="12"></div>
+<div class="field"><label>Year</label><input id="ey" type="text" maxlength="4" placeholder="2030"></div>
+<div class="field"><label>CVC</label><input id="cv" type="text" maxlength="4" placeholder="123"></div>
+</div>
+<div class="field"><label>Card Holder</label><input id="ch" type="text" placeholder="Test User"></div>
+<label class="check"><input id="sc" type="checkbox"> Save this card for future payments</label>
 <div class="actions">
-<button class="btn-ok" onclick="submit3DS('success')">Confirm Payment</button>
-<button class="btn-no" onclick="submit3DS('fail')">Cancel</button>
+<button class="btn-ok" onclick="submitForm('success')">Pay ${amountDisplay} TRY</button>
+<button class="btn-no" onclick="submitForm('fail')">Cancel</button>
 </div>
 </div>
-<form id="f" method="POST" action="${callbackUrl || '/3ds-return'}">
-<input type="hidden" name="paymentId" value="${mockTxId}">
-<input type="hidden" name="conversationData" id="cd" value="mock_conv_approve">
-<input type="hidden" name="mdStatus" id="md" value="1">
-<input type="hidden" name="status" id="st" value="success">
+<form id="f" method="POST" action="${callbackUrl}">
+<input type="hidden" name="token" value="${token}">
+<input type="hidden" name="cardNumber" id="hcn" value="">
+<input type="hidden" name="saveCard" id="hsc" value="0">
+<input type="hidden" name="mockOutcome" id="hmo" value="success">
 </form>
 <script>
-function submit3DS(type){
-document.getElementById('cd').value=type==='success'?'mock_conv_approve':'mock_conv_fail';
-document.getElementById('md').value=type==='success'?'1':'0';
-document.getElementById('st').value=type==='success'?'success':'failure';
+function fillCard(n,m,y,c,h){document.getElementById('cn').value=n;document.getElementById('em').value=m;document.getElementById('ey').value=y;document.getElementById('cv').value=c;document.getElementById('ch').value=h}
+function submitForm(outcome){
+document.getElementById('hcn').value=document.getElementById('cn').value.replace(/\\s/g,'');
+document.getElementById('hsc').value=document.getElementById('sc').checked?'1':'0';
+document.getElementById('hmo').value=outcome;
 document.getElementById('f').submit();
 }
 </script>
 </body></html>`).toString('base64');
 
-      return {
-        type: '3ds_redirect',
-        threeDSHtmlContent: mockHtml,
-        providerPaymentId: mockTxId,
-      };
+    return { token, content: mockHtml, paymentPageUrl: null };
+  }
+
+  async retrieveCheckoutForm(token) {
+    await this._delay(50);
+
+    const session = this.formSessions.get(token);
+    if (!session || session.type !== 'payment') {
+      return { success: false, failureReason: 'form_not_found' };
     }
 
-    // Direct success
+    // Read outcome from the session (tagged by the simulator callback handler)
+    const outcome = session.outcome || 'success';
+    const cardNumber = session.cardNumber || '5528790000000008';
+
+    this.formSessions.delete(token);
+
+    if (outcome !== 'success') {
+      // Map test card numbers to specific failure reasons
+      let failureReason = 'payment_cancelled_by_user';
+      if (cardNumber === '4111111111111129') failureReason = 'card_declined';
+      else if (cardNumber === '4111111111111111') failureReason = 'insufficient_funds';
+      else if (cardNumber === '4111111111111100') failureReason = 'card_expired';
+
+      return { success: false, failureReason };
+    }
+
+    // Test card failure detection (even if user clicked "success")
+    if (cardNumber === '4111111111111129') {
+      return { success: false, failureReason: 'card_declined' };
+    }
+    if (cardNumber === '4111111111111111') {
+      return { success: false, failureReason: 'insufficient_funds' };
+    }
+    if (cardNumber === '4111111111111100') {
+      return { success: false, failureReason: 'card_expired' };
+    }
+
+    const mockTxId = `mock_tx_${uuidv4()}`;
+    const mockItemTransactions = this._buildMockItemTransactions(session.items, session.amount);
+
     const response = {
-      type: 'direct',
       success: true,
       providerTxId: mockTxId,
       itemTransactions: mockItemTransactions,
     };
-    if (registerCard === '1') {
-      response.cardUserKey = `mock_cuk_${uuidv4()}`;
-      response.cardToken = `mock_ct_${uuidv4()}`;
-      response.last4 = (card.cardNumber || '').slice(-4);
-      response.cardAssociation = 'VISA';
+
+    // If user opted to save card, return card details
+    if (session.saveCard) {
+      const cuk = `mock_cuk_${uuidv4()}`;
+      const ct = `mock_ct_${uuidv4()}`;
+      response.cardUserKey = cuk;
+      response.cardToken = ct;
+      response.last4 = cardNumber.slice(-4);
+      response.cardAssociation = 'MASTER_CARD';
       response.cardType = 'CREDIT';
       response.cardBankName = 'Mock Bank';
+
+      // Also store in cardStore for consistency
+      if (!this.cardStore.has(cuk)) this.cardStore.set(cuk, []);
+      this.cardStore.get(cuk).push({ cardToken: ct, last4: cardNumber.slice(-4) });
     }
+
     return response;
   }
 
-  async complete3DS({ providerPaymentId, conversationData }) {
+  async initUniversalCardStorage({ email, cardUserKey, cardAlias, callbackUrl }) {
     await this._delay(50);
 
-    // Simulate 3DS failure
-    if (conversationData === 'mock_conv_fail') {
-      return { success: false, failureReason: '3ds_authentication_failed' };
+    const token = `mock_cs_${uuidv4()}`;
+    this.formSessions.set(token, {
+      type: 'card_storage',
+      email,
+      cardUserKey,
+      cardAlias,
+      callbackUrl,
+    });
+
+    const mockHtml = Buffer.from(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#1e293b;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{background:#fff;border-radius:12px;padding:32px;width:420px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.3)}
+.logo{font-size:20px;font-weight:700;color:#1e40af;margin-bottom:4px}
+.sub{color:#64748b;font-size:13px;margin-bottom:16px}
+.field{text-align:left;margin-bottom:12px}
+.field label{display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:4px}
+.field input{width:100%;padding:10px;border:2px solid #cbd5e1;border-radius:8px;font-size:14px}
+.field input:focus{border-color:#2563eb;outline:none}
+.row{display:flex;gap:10px}
+.row .field{flex:1}
+.actions{display:flex;gap:10px;margin-top:16px}
+.actions button{flex:1;padding:12px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+.btn-ok{background:#1e40af;color:#fff}
+.btn-ok:hover{background:#1e3a8a}
+.btn-no{background:#dc2626;color:#fff}
+.btn-no:hover{background:#b91c1c}
+</style></head><body>
+<div class="card">
+<div class="logo">iyzico Card Storage</div>
+<div class="sub">Mock Card Vault</div>
+<div class="field"><label>Card Number</label><input id="cn" type="text" maxlength="19" placeholder="5528 7900 0000 0008" value="5528790000000008"></div>
+<div class="row">
+<div class="field"><label>Month</label><input id="em" type="text" maxlength="2" placeholder="12" value="12"></div>
+<div class="field"><label>Year</label><input id="ey" type="text" maxlength="4" placeholder="2030" value="2030"></div>
+<div class="field"><label>CVC</label><input id="cv" type="text" maxlength="4" placeholder="123" value="123"></div>
+</div>
+<div class="field"><label>Card Holder</label><input id="ch" type="text" placeholder="Test User" value="Test User"></div>
+<div class="actions">
+<button class="btn-ok" onclick="submitForm('success')">Save Card</button>
+<button class="btn-no" onclick="submitForm('fail')">Cancel</button>
+</div>
+</div>
+<form id="f" method="POST" action="${callbackUrl}">
+<input type="hidden" name="token" value="${token}">
+<input type="hidden" name="cardNumber" id="hcn" value="">
+<input type="hidden" name="mockOutcome" id="hmo" value="success">
+</form>
+<script>
+function submitForm(outcome){
+document.getElementById('hcn').value=document.getElementById('cn').value.replace(/\\s/g,'');
+document.getElementById('hmo').value=outcome;
+document.getElementById('f').submit();
+}
+</script>
+</body></html>`).toString('base64');
+
+    return { token, content: mockHtml };
+  }
+
+  async retrieveCardStorageForm(token) {
+    await this._delay(50);
+
+    const session = this.formSessions.get(token);
+    if (!session || session.type !== 'card_storage') {
+      throw new Error('Card storage form not found or already used');
     }
 
+    const outcome = session.outcome || 'success';
+    const cardNumber = session.cardNumber || '5528790000000008';
+
+    this.formSessions.delete(token);
+
+    if (outcome !== 'success') {
+      throw new Error('Card storage cancelled by user');
+    }
+
+    const cuk = session.cardUserKey || `mock_cuk_${uuidv4()}`;
+    const ct = `mock_ct_${uuidv4()}`;
+    const last4 = cardNumber.slice(-4);
+
+    // Store in cardStore for deleteCard consistency
+    if (!this.cardStore.has(cuk)) this.cardStore.set(cuk, []);
+    this.cardStore.get(cuk).push({ cardToken: ct, last4 });
+
     return {
-      success: true,
-      providerTxId: providerPaymentId || `mock_tx_${uuidv4()}`,
-      itemTransactions: [{
-        itemId: 'ITEM_DEFAULT',
-        paymentTransactionId: `mock_txn_${uuidv4()}`,
-        price: '0',
-      }],
-      // Card data for save-during-payment (PaymentService only uses if metadata.saveCard is true)
-      cardUserKey: `mock_cuk_${uuidv4()}`,
-      cardToken: `mock_ct_${uuidv4()}`,
-      last4: '0000',
-      cardAssociation: 'VISA',
+      cardUserKey: cuk,
+      cardToken: ct,
+      last4,
+      cardAssociation: 'MASTER_CARD',
       cardType: 'CREDIT',
       cardBankName: 'Mock Bank',
     };
+  }
+
+  // Tag a form session with data from the callback (called by the simulator/route handler)
+  tagFormSession(token, { outcome, cardNumber, saveCard }) {
+    const session = this.formSessions.get(token);
+    if (session) {
+      if (outcome) session.outcome = outcome;
+      if (cardNumber) session.cardNumber = cardNumber;
+      if (saveCard !== undefined) session.saveCard = saveCard === '1' || saveCard === true;
+    }
   }
 
   async capture({ providerTxId, amount, currency }) {
@@ -218,6 +360,21 @@ document.getElementById('f').submit();
     }
 
     return { success: true };
+  }
+
+  _buildMockItemTransactions(items, amount) {
+    if (items && items.length > 0) {
+      return items.map((item, i) => ({
+        itemId: item.id || `ITEM_${i}`,
+        paymentTransactionId: `mock_txn_${uuidv4()}`,
+        price: String(item.price || item.amount || 0),
+      }));
+    }
+    return [{
+      itemId: 'ITEM_DEFAULT',
+      paymentTransactionId: `mock_txn_${uuidv4()}`,
+      price: String(amount),
+    }];
   }
 
   _delay(ms) {
