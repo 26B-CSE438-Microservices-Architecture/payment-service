@@ -6,19 +6,41 @@ class CardService {
     this.provider = provider;
   }
 
-  async saveCard({ userId, card, email, cardAlias }) {
-    // Look up existing cardUserKey for this user
+  // Phase 1: Initialize card storage form (PCI-safe — no raw card data)
+  async initCardStorage({ userId, email, cardAlias, callbackUrl }) {
+    // Look up existing cardUserKey for this user (reuse to avoid orphaning previous cards)
     const existing = await prisma.savedCard.findFirst({
       where: { userId },
       select: { cardUserKey: true },
     });
 
-    const result = await this.provider.registerCard({
-      card,
+    const result = await this.provider.initUniversalCardStorage({
       email,
       cardUserKey: existing?.cardUserKey || undefined,
       cardAlias,
+      callbackUrl,
     });
+
+    return result; // { token, content }
+  }
+
+  // Phase 2: Complete card storage after user fills the form
+  async completeCardStorage({ userId, token, cardAlias }) {
+    // Look up existing cardUserKey for retrieve
+    const existing = await prisma.savedCard.findFirst({
+      where: { userId },
+      select: { cardUserKey: true },
+    });
+
+    const result = await this.provider.retrieveCardStorageForm(token, {
+      cardUserKey: existing?.cardUserKey,
+    });
+
+    // Check if this card is already saved (idempotent)
+    const existingCard = await prisma.savedCard.findFirst({
+      where: { userId, cardToken: result.cardToken },
+    });
+    if (existingCard) return existingCard;
 
     const savedCard = await prisma.savedCard.create({
       data: {
@@ -26,7 +48,7 @@ class CardService {
         userId,
         cardUserKey: result.cardUserKey,
         cardToken: result.cardToken,
-        last4: result.last4 || (card.cardNumber || '').slice(-4),
+        last4: result.last4 || '****',
         cardType: result.cardType || null,
         cardAssociation: result.cardAssociation || null,
         cardBankName: result.cardBankName || null,

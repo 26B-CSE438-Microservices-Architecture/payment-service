@@ -10,7 +10,7 @@ class PaymentService {
     this.cardService = cardService;
   }
 
-  async createPayment({ idempotencyKey, orderId, userId, amount, currency, paymentMethod, buyer, items, card, callbackUrl: inputCallbackUrl, savedCardId, saveCard }) {
+  async createPayment({ idempotencyKey, orderId, userId, amount, currency, paymentMethod, buyer, items, callbackUrl: inputCallbackUrl, savedCardId }) {
     // 1. Idempotency check
     const existing = await prisma.payment.findUnique({
       where: { idempotencyKey },
@@ -28,32 +28,11 @@ class PaymentService {
       await this._voidPayment(previousAuth);
     }
 
-    // 3. Validate card input
-    if (savedCardId && card) {
-      const error = new Error('Provide either card details or savedCardId, not both');
-      error.code = 'MISSING_CARD_DETAILS';
-      error.statusCode = 400;
-      throw error;
-    }
-    if (!savedCardId && !card) {
-      const error = new Error('Either card details or savedCardId is required');
-      error.code = 'MISSING_CARD_DETAILS';
-      error.statusCode = 400;
-      throw error;
-    }
-
-    // 4. Resolve saved card if needed
-    let resolvedCard = card;
-    if (savedCardId) {
-      resolvedCard = await this.cardService.getCardForPayment(userId, savedCardId);
-    }
-
-    // 5. Create payment record
+    // 3. Create payment record
     const paymentId = generatePaymentId();
     const metadata = {};
     if (buyer) metadata.buyer = buyer;
     if (items) metadata.items = items;
-    if (saveCard) metadata.saveCard = true;
 
     const payment = await prisma.payment.create({
       data: {
@@ -70,15 +49,16 @@ class PaymentService {
       },
     });
 
-    // 6. Call provider.authorize
-    let callbackUrl;
-    if (config.payment3dsEnabled) {
-      if (inputCallbackUrl) {
-        callbackUrl = inputCallbackUrl.replace('{paymentId}', paymentId);
-      } else {
-        callbackUrl = `${config.apiBaseUrl || `http://localhost:${config.port}`}/payments/${paymentId}/3ds/callback`;
-      }
+    // 4. Branch: saved card (direct NON3D) vs new card (Checkout Form)
+    if (savedCardId) {
+      return this._handleSavedCardPayment(payment, { userId, amount, currency, buyer, items, savedCardId });
     }
+
+    return this._handleCheckoutFormPayment(payment, { amount, currency, buyer, items, callbackUrl: inputCallbackUrl });
+  }
+
+  async _handleSavedCardPayment(payment, { userId, amount, currency, buyer, items, savedCardId }) {
+    const resolvedCard = await this.cardService.getCardForPayment(userId, savedCardId);
 
     let result;
     try {
@@ -88,12 +68,9 @@ class PaymentService {
         card: resolvedCard,
         buyer,
         items,
-        paymentId,
-        callbackUrl,
-        registerCard: (saveCard && !savedCardId) ? '1' : '0',
+        paymentId: payment.id,
       });
     } catch (err) {
-      // Provider error → mark as FAILED
       const updated = await this._transitionPayment(payment.id, 'CREATED', 'FAILED', {
         failureReason: err.message,
       });
@@ -102,24 +79,7 @@ class PaymentService {
       return { payment: updated };
     }
 
-    // 5. Handle result
-    if (result.type === '3ds_redirect') {
-      const updated = await this._transitionPayment(payment.id, 'CREATED', 'AWAITING_3DS', {
-        providerTxId: result.providerPaymentId || null,
-      });
-      await this._logEvent(payment.id, 'CREATED', 'AWAITING_3DS', 'system', {
-        threeDSInitiated: true,
-      });
-      return {
-        payment: updated,
-        threeDSRedirect: {
-          threeDSHtmlContent: result.threeDSHtmlContent,
-        },
-      };
-    }
-
     if (result.success) {
-      // Store itemTransactions in metadata for future refunds
       const updatedMetadata = {
         ...(payment.metadata || {}),
         itemTransactions: result.itemTransactions || [],
@@ -133,24 +93,6 @@ class PaymentService {
         providerTxId: result.providerTxId,
       });
       publisher.publish('payment.authorized', this._eventPayload(updated));
-
-      // Save card if requested (fire-and-forget)
-      if (saveCard && result.cardUserKey && result.cardToken) {
-        try {
-          await this.cardService.saveCardFromPayment({
-            userId,
-            cardUserKey: result.cardUserKey,
-            cardToken: result.cardToken,
-            last4: result.last4,
-            cardAssociation: result.cardAssociation,
-            cardType: result.cardType,
-            cardBankName: result.cardBankName,
-          });
-        } catch (err) {
-          console.warn('Failed to save card during payment:', err.message);
-        }
-      }
-
       return { payment: updated };
     }
 
@@ -165,33 +107,83 @@ class PaymentService {
     return { payment: updated };
   }
 
-  async complete3DS(paymentId, { providerPaymentId, conversationData }) {
-    const payment = await this._findPaymentOrThrow(paymentId);
-    assertTransition(payment.status, 'AUTHORIZED'); // validates it's AWAITING_3DS
+  async _handleCheckoutFormPayment(payment, { amount, currency, buyer, items, callbackUrl: inputCallbackUrl }) {
+    // Build callback URL — always required for CF
+    let callbackUrl;
+    if (inputCallbackUrl) {
+      callbackUrl = inputCallbackUrl.replace('{paymentId}', payment.id);
+    } else {
+      callbackUrl = `${config.apiBaseUrl || `http://localhost:${config.port}`}/payments/${payment.id}/checkout-form/callback`;
+    }
 
-    const result = await this.provider.complete3DS({
-      providerPaymentId: providerPaymentId || payment.providerTxId,
-      conversationData,
+    let formResult;
+    try {
+      formResult = await this.provider.initCheckoutForm({
+        paymentId: payment.id,
+        amount,
+        currency: currency || 'TRY',
+        buyer,
+        items,
+        callbackUrl,
+      });
+    } catch (err) {
+      const updated = await this._transitionPayment(payment.id, 'CREATED', 'FAILED', {
+        failureReason: err.message,
+      });
+      await this._logEvent(payment.id, 'CREATED', 'FAILED', 'system', { error: err.message });
+      publisher.publish('payment.failed', this._eventPayload(updated));
+      return { payment: updated };
+    }
+
+    // Store CF token in metadata for the callback step
+    const updatedMetadata = {
+      ...(payment.metadata || {}),
+      checkoutFormToken: formResult.token,
+    };
+
+    const updated = await this._transitionPayment(payment.id, 'CREATED', 'AWAITING_FORM', {
+      metadata: updatedMetadata,
+    });
+    await this._logEvent(payment.id, 'CREATED', 'AWAITING_FORM', 'system', {
+      checkoutFormInitiated: true,
     });
 
+    return {
+      payment: updated,
+      checkoutForm: {
+        token: formResult.token,
+        content: formResult.content,
+        paymentPageUrl: formResult.paymentPageUrl,
+      },
+    };
+  }
+
+  async completeCheckoutForm(paymentId, { token }) {
+    const payment = await this._findPaymentOrThrow(paymentId);
+    assertTransition(payment.status, 'AUTHORIZED'); // validates current is AWAITING_FORM
+
+    const result = await this.provider.retrieveCheckoutForm(token);
+
     if (result.success) {
-      // Store itemTransactions in metadata for future refunds
       const updatedMetadata = {
         ...(payment.metadata || {}),
         itemTransactions: result.itemTransactions || [],
       };
-      const updated = await this._transitionPayment(paymentId, 'AWAITING_3DS', 'AUTHORIZED', {
+      // Remove the transient checkoutFormToken
+      delete updatedMetadata.checkoutFormToken;
+
+      const updated = await this._transitionPayment(paymentId, 'AWAITING_FORM', 'AUTHORIZED', {
         providerTxId: result.providerTxId,
         authorizedAt: new Date(),
         metadata: updatedMetadata,
       });
-      await this._logEvent(paymentId, 'AWAITING_3DS', 'AUTHORIZED', 'system', {
+      await this._logEvent(paymentId, 'AWAITING_FORM', 'AUTHORIZED', 'system', {
         providerTxId: result.providerTxId,
       });
       publisher.publish('payment.authorized', this._eventPayload(updated));
 
-      // Save card if requested during original payment creation (fire-and-forget)
-      if (payment.metadata?.saveCard && result.cardUserKey && result.cardToken) {
+      // Save card if iyzico returned card data (user opted in via CF checkbox) — fire-and-forget
+      if (result.cardUserKey && result.cardToken) {
         try {
           await this.cardService.saveCardFromPayment({
             userId: payment.userId,
@@ -203,17 +195,17 @@ class PaymentService {
             cardBankName: result.cardBankName,
           });
         } catch (err) {
-          console.warn('Failed to save card after 3DS:', err.message);
+          console.warn('Failed to save card after checkout form:', err.message);
         }
       }
 
       return { payment: updated };
     }
 
-    const updated = await this._transitionPayment(paymentId, 'AWAITING_3DS', 'FAILED', {
+    const updated = await this._transitionPayment(paymentId, 'AWAITING_FORM', 'FAILED', {
       failureReason: result.failureReason,
     });
-    await this._logEvent(paymentId, 'AWAITING_3DS', 'FAILED', 'system', {
+    await this._logEvent(paymentId, 'AWAITING_FORM', 'FAILED', 'system', {
       reason: result.failureReason,
     });
     publisher.publish('payment.failed', this._eventPayload(updated));
