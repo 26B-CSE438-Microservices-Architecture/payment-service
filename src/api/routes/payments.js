@@ -11,10 +11,10 @@ function setup(service) {
   paymentService = service;
 }
 
-// POST /payments — create + authorize
+// POST /payments — create + authorize (saved card) or init checkout form (new card)
 router.post('/', authMiddleware, idempotencyMiddleware, async (req, res, next) => {
   try {
-    const { orderId, amount, currency, paymentMethod, buyer, items, card, callbackUrl, savedCardId, saveCard } = req.body;
+    const { orderId, amount, currency, paymentMethod, buyer, items, callbackUrl, savedCardId } = req.body;
 
     const result = await paymentService.createPayment({
       idempotencyKey: req.idempotencyKey,
@@ -25,15 +25,13 @@ router.post('/', authMiddleware, idempotencyMiddleware, async (req, res, next) =
       paymentMethod,
       buyer,
       items,
-      card,
       callbackUrl,
       savedCardId,
-      saveCard,
     });
 
     const response = { payment: result.payment };
-    if (result.threeDSRedirect) {
-      response.threeDSRedirect = result.threeDSRedirect;
+    if (result.checkoutForm) {
+      response.checkoutForm = result.checkoutForm;
     }
 
     res.status(result.duplicate ? 200 : 201).json(response);
@@ -64,14 +62,17 @@ router.post('/:paymentId/cancel', authMiddleware, async (req, res, next) => {
   }
 });
 
-// POST /payments/:paymentId/3ds/callback — NO auth (comes from provider/bank redirect)
-router.post('/:paymentId/3ds/callback', async (req, res, next) => {
+// POST /payments/:paymentId/checkout-form/callback — NO auth (forwarded by Order Service from iyzico's callback)
+router.post('/:paymentId/checkout-form/callback', async (req, res, next) => {
   try {
-    const { paymentId: providerPaymentId, conversationData } = req.body;
-    const result = await paymentService.complete3DS(req.params.paymentId, {
-      providerPaymentId,
-      conversationData,
-    });
+    const { token } = req.body;
+    if (!token) {
+      const error = new Error('token is required in the callback body');
+      error.code = 'MISSING_FORM_TOKEN';
+      error.statusCode = 400;
+      throw error;
+    }
+    const result = await paymentService.completeCheckoutForm(req.params.paymentId, { token });
     res.json({ payment: result.payment });
   } catch (err) {
     next(err);

@@ -8,22 +8,39 @@ function setup(service) {
   cardService = service;
 }
 
-// POST /cards — save a card (standalone, no payment)
+// POST /cards — initialize card storage form (PCI-safe, no raw card data)
 router.post('/', authMiddleware, async (req, res, next) => {
   try {
-    const { card, email, cardAlias } = req.body;
+    const { email, cardAlias, callbackUrl } = req.body;
 
-    if (!card || !card.cardNumber) {
-      const error = new Error('Card details (cardNumber, expireMonth, expireYear, cardHolderName) are required');
-      error.code = 'MISSING_CARD_DETAILS';
+    const result = await cardService.initCardStorage({
+      userId: req.userId,
+      email,
+      cardAlias,
+      callbackUrl,
+    });
+
+    res.status(201).json({ cardForm: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /cards/checkout-form/callback — complete card storage after form submission (requires auth)
+router.post('/checkout-form/callback', authMiddleware, async (req, res, next) => {
+  try {
+    const { token, cardAlias } = req.body;
+
+    if (!token) {
+      const error = new Error('token is required in the callback body');
+      error.code = 'MISSING_FORM_TOKEN';
       error.statusCode = 400;
       throw error;
     }
 
-    const savedCard = await cardService.saveCard({
+    const savedCard = await cardService.completeCardStorage({
       userId: req.userId,
-      card,
-      email,
+      token,
       cardAlias,
     });
 
