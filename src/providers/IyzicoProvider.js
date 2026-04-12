@@ -10,28 +10,60 @@ class IyzicoProvider {
     });
   }
 
-  async authorize({ amount, currency, card, buyer, items, paymentId, callbackUrl, registerCard }) {
-    const request = this._buildRequest({ amount, currency, card, buyer, items, paymentId, registerCard });
-
-    if (config.payment3dsEnabled) {
-      if (!callbackUrl) {
-        throw new Error('callbackUrl is required when 3DS is enabled');
-      }
-      request.callbackUrl = callbackUrl;
-      return this._initiate3DS(request);
+  // Saved-card payments only (NON3D direct pre-auth)
+  async authorize({ amount, currency, card, buyer, items, paymentId }) {
+    if (!card.cardToken || !card.cardUserKey) {
+      throw new Error('authorize() only accepts saved cards ({cardUserKey, cardToken}). New cards must use the Checkout Form flow.');
     }
 
+    const request = this._buildRequest({ amount, currency, card, buyer, items, paymentId });
     return this._directPreAuth(request);
   }
 
-  async complete3DS({ providerPaymentId, conversationData }) {
-    const result = await this._call('threedsPayment', 'create', {
+  // Checkout Form — new card payment initialization (pre-auth)
+  async initCheckoutForm({ paymentId, amount, currency, buyer, items, callbackUrl }) {
+    this._warnMissingFields(buyer, items);
+
+    const priceStr = this._formatPrice(amount);
+
+    const request = {
       locale: Iyzipay.LOCALE.TR,
-      paymentId: providerPaymentId,
-      conversationData,
-    });
+      conversationId: paymentId || undefined,
+      price: priceStr,
+      paidPrice: priceStr,
+      currency: currency || Iyzipay.CURRENCY.TRY,
+      basketId: paymentId || 'B1',
+      paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
+      callbackUrl,
+      buyer: this._mapBuyer(buyer),
+      shippingAddress: this._mapAddress(buyer?.shippingAddress || buyer),
+      billingAddress: this._mapAddress(buyer?.billingAddress || buyer),
+      basketItems: this._mapBasketItems(items, amount),
+    };
+
+    const result = await this._call('checkoutFormInitializePreAuth', 'create', request);
 
     if (result.status === 'success') {
+      return {
+        token: result.token,
+        content: result.checkoutFormContent,
+        paymentPageUrl: result.paymentPageUrl || null,
+      };
+    }
+
+    const error = new Error(result.errorMessage || 'Checkout form initialization failed');
+    error.code = 'CHECKOUT_FORM_INIT_FAILED';
+    throw error;
+  }
+
+  // Checkout Form — retrieve result after user completes the form
+  async retrieveCheckoutForm(token) {
+    const result = await this._call('checkoutForm', 'retrieve', {
+      locale: Iyzipay.LOCALE.TR,
+      token,
+    });
+
+    if (result.status === 'success' && result.paymentStatus === 'SUCCESS') {
       const response = {
         success: true,
         providerTxId: String(result.paymentId),
@@ -39,7 +71,8 @@ class IyzicoProvider {
       };
       if (result.cardUserKey) response.cardUserKey = result.cardUserKey;
       if (result.cardToken) response.cardToken = result.cardToken;
-      if (result.binNumber) response.last4 = result.lastFourDigits || result.binNumber.slice(-4);
+      if (result.lastFourDigits) response.last4 = result.lastFourDigits;
+      else if (result.binNumber) response.last4 = result.binNumber.slice(-4);
       if (result.cardAssociation) response.cardAssociation = result.cardAssociation;
       if (result.cardType) response.cardType = result.cardType;
       if (result.cardFamily) response.cardBankName = result.cardFamily;
@@ -48,7 +81,69 @@ class IyzicoProvider {
 
     return {
       success: false,
-      failureReason: result.errorMessage || '3ds_authentication_failed',
+      failureReason: result.errorMessage || result.paymentStatus || 'checkout_form_failed',
+    };
+  }
+
+  // Universal Card Storage — initialize form for standalone card save
+  async initUniversalCardStorage({ email, cardUserKey, cardAlias, callbackUrl }) {
+    const request = {
+      locale: Iyzipay.LOCALE.TR,
+      email: email || 'noreply@example.com',
+      callbackUrl,
+    };
+    if (cardUserKey) request.cardUserKey = cardUserKey;
+    if (cardAlias) request.cardAlias = cardAlias;
+
+    // The SDK resource method may be 'create' or 'retrieve' depending on version
+    let result;
+    try {
+      result = await this._call('universalCardStorageInitialize', 'create', request);
+    } catch (err) {
+      // Fallback: some SDK versions expose this as 'retrieve' instead of 'create'
+      result = await this._call('universalCardStorageInitialize', 'retrieve', request);
+    }
+
+    if (result.status === 'success') {
+      return {
+        token: result.token,
+        content: result.ucsFormContent || result.checkoutFormContent || null,
+      };
+    }
+
+    const error = new Error(result.errorMessage || 'Card storage initialization failed');
+    error.code = 'CARD_STORAGE_INIT_FAILED';
+    throw error;
+  }
+
+  // Universal Card Storage — retrieve card data after form completion
+  // Since there's no dedicated retrieve resource, we use cardList to find the newly saved card
+  async retrieveCardStorageForm(token, { cardUserKey } = {}) {
+    if (!cardUserKey) {
+      throw new Error('cardUserKey is required to retrieve card storage result');
+    }
+
+    const result = await this._call('cardList', 'retrieve', {
+      locale: Iyzipay.LOCALE.TR,
+      cardUserKey,
+    });
+
+    if (result.status !== 'success' || !result.cardDetails || result.cardDetails.length === 0) {
+      const error = new Error(result.errorMessage || 'No cards found after storage');
+      error.code = 'CARD_STORAGE_RETRIEVE_FAILED';
+      throw error;
+    }
+
+    // Find the most recently added card (last in the list)
+    const latestCard = result.cardDetails[result.cardDetails.length - 1];
+
+    return {
+      cardUserKey: result.cardUserKey || cardUserKey,
+      cardToken: latestCard.cardToken,
+      last4: latestCard.lastFourDigits || latestCard.binNumber?.slice(-4) || '****',
+      cardAssociation: latestCard.cardAssociation || null,
+      cardType: latestCard.cardType || null,
+      cardBankName: latestCard.cardBankName || null,
     };
   }
 
@@ -170,62 +265,26 @@ class IyzicoProvider {
     const result = await this._call('paymentPreAuth', 'create', request);
 
     if (result.status === 'success') {
-      const response = {
-        type: 'direct',
+      return {
         success: true,
         providerTxId: String(result.paymentId),
         itemTransactions: this._extractItemTransactions(result),
       };
-      if (result.cardUserKey) response.cardUserKey = result.cardUserKey;
-      if (result.cardToken) response.cardToken = result.cardToken;
-      if (result.binNumber) response.last4 = result.lastFourDigits || result.binNumber.slice(-4);
-      if (result.cardAssociation) response.cardAssociation = result.cardAssociation;
-      if (result.cardType) response.cardType = result.cardType;
-      if (result.cardFamily) response.cardBankName = result.cardFamily;
-      return response;
     }
 
     return {
-      type: 'direct',
       success: false,
       failureReason: result.errorMessage || 'payment_declined',
     };
   }
 
-  async _initiate3DS(request) {
-    const result = await this._call('threedsInitializePreAuth', 'create', request);
-
-    if (result.status === 'success') {
-      return {
-        type: '3ds_redirect',
-        threeDSHtmlContent: result.threeDSHtmlContent,
-        providerPaymentId: result.paymentId ? String(result.paymentId) : undefined,
-      };
-    }
-
-    return {
-      type: 'direct',
-      success: false,
-      failureReason: result.errorMessage || '3ds_initialization_failed',
-    };
-  }
-
-  _buildRequest({ amount, currency, card, buyer, items, paymentId, registerCard }) {
+  _buildRequest({ amount, currency, card, buyer, items, paymentId }) {
     this._warnMissingFields(buyer, items);
 
     const priceStr = this._formatPrice(amount);
 
-    // Saved card: use cardUserKey + cardToken instead of raw card details
-    const paymentCard = card.cardToken
-      ? { cardUserKey: card.cardUserKey, cardToken: card.cardToken }
-      : {
-          cardHolderName: card.cardHolderName || 'Unknown',
-          cardNumber: card.cardNumber,
-          expireMonth: card.expireMonth,
-          expireYear: card.expireYear,
-          cvc: card.cvc,
-          registerCard: registerCard || '0',
-        };
+    // Only saved-card path: cardUserKey + cardToken
+    const paymentCard = { cardUserKey: card.cardUserKey, cardToken: card.cardToken };
 
     return {
       locale: Iyzipay.LOCALE.TR,
