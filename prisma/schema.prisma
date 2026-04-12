@@ -19,7 +19,6 @@ model Payment {
   provider            String?  @db.VarChar(20)
   providerTxId        String?  @map("provider_tx_id") @db.VarChar(100)
   failureReason       String?  @map("failure_reason")
-  threeDSSessionToken String?  @map("three_ds_session_token")
   cancelReason        String?  @map("cancel_reason")
   metadata            Json?
   createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz()

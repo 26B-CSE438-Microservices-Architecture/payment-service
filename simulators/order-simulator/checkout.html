@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkout</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0f4f8; min-height: 100vh; display: flex; justify-content: center; padding: 40px 16px; }
+
+  .page { width: 460px; }
+  .steps { display: flex; justify-content: center; gap: 32px; margin-bottom: 24px; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #94a3b8; font-weight: 500; }
+  .step.active { color: #2563eb; font-weight: 700; }
+  .step.done { color: #16a34a; }
+  .step-num { width: 28px; height: 28px; border-radius: 50%; background: #e2e8f0; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; }
+  .step.active .step-num { background: #2563eb; }
+  .step.done .step-num { background: #16a34a; }
+
+  .card { background: #fff; border-radius: 12px; padding: 28px; box-shadow: 0 1px 4px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06); }
+  h2 { font-size: 18px; margin-bottom: 20px; text-align: center; color: #1e293b; }
+  label { display: block; font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+  select, input[type="text"], input[type="number"] {
+    width: 100%; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 8px; font-size: 14px; margin-bottom: 14px; transition: border-color .15s;
+  }
+  select:focus, input:focus { border-color: #2563eb; outline: none; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+
+  .separator { border: none; border-top: 1px solid #f1f5f9; margin: 18px 0; }
+
+  .btn { width: 100%; padding: 14px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background .15s; }
+  .btn-pay { background: #2563eb; color: #fff; }
+  .btn-pay:hover { background: #1d4ed8; }
+  .btn-pay:disabled { background: #94a3b8; cursor: not-allowed; }
+
+  /* Saved cards */
+  .saved-cards-section { margin-bottom: 18px; }
+  .saved-cards-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .saved-cards-header label { margin-bottom: 0; }
+  .saved-card-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1.5px solid #e2e8f0; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s; }
+  .saved-card-item:hover { border-color: #2563eb; }
+  .saved-card-item.selected { border-color: #2563eb; background: #eff6ff; }
+  .saved-card-item input[type="radio"] { accent-color: #2563eb; }
+  .saved-card-info { flex: 1; }
+  .saved-card-info .card-label { font-size: 14px; font-weight: 600; color: #1e293b; }
+  .saved-card-info .card-detail { font-size: 12px; color: #64748b; }
+  .btn-delete-card { background: none; border: none; color: #dc2626; cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: 4px; }
+  .btn-delete-card:hover { background: #fee2e2; }
+  .no-saved-cards { font-size: 13px; color: #94a3b8; padding: 8px 0; }
+
+  .card-source-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
+  .card-source-toggle button { flex: 1; padding: 8px; border: 1.5px solid #e2e8f0; border-radius: 8px; background: #fff; font-size: 13px; font-weight: 600; color: #64748b; cursor: pointer; }
+  .card-source-toggle button.active { border-color: #2563eb; background: #eff6ff; color: #2563eb; }
+
+  /* Save card standalone */
+  .save-standalone { margin-top: 12px; }
+  .btn-save-card { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; padding: 8px 16px; font-size: 13px; border-radius: 6px; cursor: pointer; width: auto; }
+  .btn-save-card:hover { background: #e2e8f0; }
+
+  /* Checkout Form iframe container */
+  .cf-frame { display: none; width: 100%; border: none; border-radius: 8px; min-height: 480px; background: #1e293b; }
+  .cf-frame.active { display: block; }
+
+  /* Result */
+  .result { display: none; text-align: center; padding: 24px; }
+  .result.active { display: block; }
+  .result-icon { font-size: 56px; margin-bottom: 12px; line-height: 1; }
+  .result-icon.ok { color: #16a34a; }
+  .result-icon.fail { color: #dc2626; }
+  .result h3 { font-size: 18px; margin-bottom: 8px; color: #1e293b; }
+  .result p { font-size: 14px; color: #64748b; margin-bottom: 20px; }
+  .result .detail { text-align: left; font-family: monospace; font-size: 11px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-bottom: 16px; color: #475569; }
+
+  .btn-new { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+  .btn-new:hover { background: #e2e8f0; }
+
+  /* Waiting overlay */
+  .waiting { display: none; text-align: center; padding: 32px 0; }
+  .waiting.active { display: block; }
+  .spinner { width: 40px; height: 40px; border: 4px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 16px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .waiting p { color: #64748b; font-size: 14px; }
+
+  /* SSE status */
+  .sse-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; margin-right: 6px; vertical-align: middle; }
+  .sse-dot.connected { background: #16a34a; }
+  .status-bar { text-align: center; font-size: 11px; color: #94a3b8; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="steps">
+    <div class="step active" id="step-1"><span class="step-num">1</span> Payment</div>
+    <div class="step" id="step-2"><span class="step-num">2</span> Checkout Form</div>
+    <div class="step" id="step-3"><span class="step-num">3</span> Result</div>
+  </div>
+
+  <div class="card">
+    <!-- Step 1: Payment options -->
+    <div id="checkout-form">
+      <h2>Payment Details</h2>
+
+      <!-- Card source toggle -->
+      <div class="card-source-toggle" id="card-source-toggle">
+        <button class="active" onclick="setCardSource('saved')">Saved Cards</button>
+        <button onclick="setCardSource('new')">New Card</button>
+      </div>
+
+      <!-- Saved cards section -->
+      <div id="saved-cards-section" class="saved-cards-section">
+        <div id="saved-cards-list">
+          <p class="no-saved-cards">Loading saved cards...</p>
+        </div>
+        <button class="btn-save-card" onclick="saveCardStandalone()" id="btn-save-standalone">+ Save a New Card</button>
+      </div>
+
+      <!-- New card info section (explains CF flow) -->
+      <div id="new-card-section" style="display:none;">
+        <div style="padding:16px;background:#eff6ff;border-radius:8px;margin-bottom:14px;">
+          <p style="font-size:13px;color:#1e40af;font-weight:600;margin-bottom:4px;">Secure Card Entry</p>
+          <p style="font-size:12px;color:#475569;">You'll enter your card details on iyzico's secure payment form. Your card data never touches our servers (PCI-safe).</p>
+        </div>
+        <div style="padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:14px;">
+          <p style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:8px;">Sandbox Test Cards</p>
+          <table style="width:100%;font-size:11px;border-collapse:collapse;">
+            <tr style="border-bottom:1px solid #e2e8f0;">
+              <td style="padding:4px 0;color:#475569;font-family:monospace;cursor:pointer;" onclick="navigator.clipboard.writeText('5528790000000008')" title="Click to copy">5528790000000008</td>
+              <td style="padding:4px 8px;color:#94a3b8;">Halkbank MC</td>
+              <td style="padding:4px 0;color:#94a3b8;font-family:monospace;">12/30 · 123</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e2e8f0;">
+              <td style="padding:4px 0;color:#475569;font-family:monospace;cursor:pointer;" onclick="navigator.clipboard.writeText('5400360000000003')" title="Click to copy">5400360000000003</td>
+              <td style="padding:4px 8px;color:#94a3b8;">Garanti MC</td>
+              <td style="padding:4px 0;color:#94a3b8;font-family:monospace;">12/30 · 123</td>
+            </tr>
+            <tr>
+              <td style="padding:4px 0;color:#475569;font-family:monospace;cursor:pointer;" onclick="navigator.clipboard.writeText('4543590000000006')" title="Click to copy">4543590000000006</td>
+              <td style="padding:4px 8px;color:#94a3b8;">IsBankasi Visa</td>
+              <td style="padding:4px 0;color:#94a3b8;font-family:monospace;">12/30 · 123</td>
+            </tr>
+          </table>
+          <p style="font-size:10px;color:#94a3b8;margin-top:6px;">Click a card number to copy. Expiry and CVC are the same for all.</p>
+        </div>
+      </div>
+
+      <hr class="separator">
+
+      <label>Amount (TRY)</label>
+      <input type="number" id="amount" value="50.00" step="0.01" min="0.01">
+
+      <button class="btn btn-pay" id="btn-pay" onclick="pay()">Pay Now</button>
+    </div>
+
+    <!-- Step 2: Checkout Form in iframe -->
+    <iframe class="cf-frame" id="cf-frame" sandbox="allow-forms allow-scripts allow-same-origin"></iframe>
+
+    <!-- Waiting spinner -->
+    <div class="waiting" id="waiting">
+      <div class="spinner"></div>
+      <p>Processing your payment...</p>
+    </div>
+
+    <!-- Step 3: Result -->
+    <div class="result" id="result">
+      <div class="result-icon" id="result-icon"></div>
+      <h3 id="result-title"></h3>
+      <p id="result-msg"></p>
+      <details style="margin-bottom:16px;">
+        <summary style="cursor:pointer;font-size:12px;color:#94a3b8;">Response details</summary>
+        <div class="detail" id="result-detail"></div>
+      </details>
+      <button class="btn btn-new" onclick="reset()">New Payment</button>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span class="sse-dot" id="sse-dot"></span>
+    <span id="sse-status">Connecting to Order Service...</span>
+  </div>
+</div>
+
+<script>
+let currentPayment = null;
+let savedCards = [];
+let selectedSavedCardId = null;
+let cardSource = 'saved'; // 'saved' or 'new'
+
+// --- Card source toggle ---
+function setCardSource(source) {
+  cardSource = source;
+  selectedSavedCardId = null;
+  const btns = document.querySelectorAll('.card-source-toggle button');
+  btns[0].className = source === 'saved' ? 'active' : '';
+  btns[1].className = source === 'new' ? 'active' : '';
+  document.getElementById('saved-cards-section').style.display = source === 'saved' ? 'block' : 'none';
+  document.getElementById('new-card-section').style.display = source === 'new' ? 'block' : 'none';
+}
+
+// --- Saved cards ---
+async function loadSavedCards() {
+  try {
+    const res = await fetch('/api/cards');
+    const data = await res.json();
+    savedCards = data.cards || [];
+    renderSavedCards();
+  } catch (err) {
+    document.getElementById('saved-cards-list').innerHTML = '<p class="no-saved-cards">Failed to load saved cards</p>';
+  }
+}
+
+function renderSavedCards() {
+  const container = document.getElementById('saved-cards-list');
+  if (savedCards.length === 0) {
+    container.innerHTML = '<p class="no-saved-cards">No saved cards yet. Save one below or switch to "New Card" to pay.</p>';
+    return;
+  }
+
+  container.innerHTML = savedCards.map(card => {
+    const assoc = card.cardAssociation || 'CARD';
+    const alias = card.cardAlias ? ` (${card.cardAlias})` : '';
+    return `
+      <div class="saved-card-item ${selectedSavedCardId === card.id ? 'selected' : ''}" onclick="selectSavedCard('${card.id}')">
+        <input type="radio" name="saved-card" ${selectedSavedCardId === card.id ? 'checked' : ''}>
+        <div class="saved-card-info">
+          <div class="card-label">${assoc} &bull;&bull;&bull;&bull; ${card.last4}${alias}</div>
+          <div class="card-detail">${card.cardType || ''} ${card.cardBankName ? '- ' + card.cardBankName : ''}</div>
+        </div>
+        <button class="btn-delete-card" onclick="event.stopPropagation(); deleteCard('${card.id}')">Delete</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectSavedCard(cardId) {
+  selectedSavedCardId = cardId;
+  renderSavedCards();
+}
+
+async function deleteCard(cardId) {
+  if (!confirm('Delete this saved card?')) return;
+  try {
+    await fetch(`/api/cards/${cardId}`, { method: 'DELETE' });
+    savedCards = savedCards.filter(c => c.id !== cardId);
+    if (selectedSavedCardId === cardId) selectedSavedCardId = null;
+    renderSavedCards();
+  } catch (err) {
+    alert('Failed to delete card: ' + err.message);
+  }
+}
+
+// --- Save card standalone (via Checkout Form) ---
+async function saveCardStandalone() {
+  const btn = document.getElementById('btn-save-standalone');
+  btn.disabled = true;
+  btn.textContent = 'Loading form...';
+
+  try {
+    const res = await fetch('/api/cards', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+
+    if (data.cardForm && data.cardForm.content) {
+      // Show the card storage form in an iframe
+      setStep(2);
+      document.getElementById('checkout-form').style.display = 'none';
+      const iframe = document.getElementById('cf-frame');
+      iframe.className = 'cf-frame active';
+      iframe.srcdoc = decodeFormContent(data.cardForm.content);
+    } else {
+      alert('Failed to initialize card storage form: ' + JSON.stringify(data));
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '+ Save a New Card';
+  }
+}
+
+function decodeFormContent(content) {
+  try { return atob(content); } catch { return content; }
+}
+
+function setStep(n) {
+  for (let i = 1; i <= 3; i++) {
+    const el = document.getElementById(`step-${i}`);
+    el.className = 'step' + (i < n ? ' done' : '') + (i === n ? ' active' : '');
+  }
+}
+
+// --- SSE: listen for events from Order Service ---
+const evtSource = new EventSource('/events');
+evtSource.onopen = () => {
+  document.getElementById('sse-dot').className = 'sse-dot connected';
+  document.getElementById('sse-status').textContent = 'Connected to Order Service';
+};
+evtSource.onerror = () => {
+  document.getElementById('sse-dot').className = 'sse-dot';
+  document.getElementById('sse-status').textContent = 'Disconnected from Order Service';
+};
+evtSource.onmessage = (e) => {
+  const event = JSON.parse(e.data);
+  if (!currentPayment) return;
+
+  // Listen for RabbitMQ events that resolve checkout form payments
+  if (event.type === 'rabbitmq_event' && event.payload.paymentId === currentPayment.id) {
+    if (event.routingKey === 'payment.authorized') {
+      showResult('success', 'Payment Authorized',
+        'Your card has been charged. The restaurant will confirm your order shortly.',
+        event.payload);
+    } else if (event.routingKey === 'payment.failed') {
+      showResult('failure', 'Payment Failed',
+        event.payload.failureReason || 'Payment verification failed. Please try again.',
+        event.payload);
+    }
+  }
+};
+
+// Listen for postMessage from checkout form iframe
+window.addEventListener('message', (e) => {
+  if (e.data && (e.data.status === 'success' || e.data.status === 'failure' || e.data.status === 'error')) {
+    document.getElementById('cf-frame').className = 'cf-frame';
+
+    if (e.data.card) {
+      // Card storage form completed
+      showResult(e.data.status === 'success' ? 'success' : 'failure',
+        e.data.status === 'success' ? 'Card Saved' : 'Card Save Failed',
+        e.data.message, e.data);
+    } else {
+      // Payment form completed
+      if (e.data.status === 'success') {
+        showResult('success', 'Payment Authorized',
+          'Your card has been charged. The restaurant will confirm your order shortly.', e.data);
+      } else {
+        showResult('failure', 'Payment Failed', e.data.message || 'Payment verification failed.', e.data);
+      }
+    }
+  }
+});
+
+// --- Pay ---
+async function pay() {
+  const btn = document.getElementById('btn-pay');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  const amount = Math.round(parseFloat(document.getElementById('amount').value) * 100);
+
+  // Build request body
+  const body = { amount };
+
+  if (cardSource === 'saved' && selectedSavedCardId) {
+    body.savedCardId = selectedSavedCardId;
+  } else if (cardSource === 'saved' && !selectedSavedCardId) {
+    // No saved card selected, no new card — this is the CF flow
+    // No card data needed, Payment API will init Checkout Form
+  }
+  // cardSource === 'new' also goes through CF — no card data needed
+
+  try {
+    const res = await fetch('/api/create-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    currentPayment = data.payment;
+
+    if (data.payment.status === 'AWAITING_FORM' && data.checkoutForm) {
+      // Show the checkout form in an iframe
+      setStep(2);
+      document.getElementById('checkout-form').style.display = 'none';
+      const iframe = document.getElementById('cf-frame');
+      iframe.className = 'cf-frame active';
+      iframe.srcdoc = decodeFormContent(data.checkoutForm.content);
+
+    } else if (data.payment.status === 'AUTHORIZED') {
+      showResult('success', 'Payment Authorized',
+        'Your card has been charged. The restaurant will confirm your order shortly.', data);
+
+    } else if (data.payment.status === 'FAILED') {
+      showResult('failure', 'Payment Failed',
+        data.payment.failureReason || 'Your card was declined.', data);
+
+    } else {
+      showResult('failure', 'Unexpected Status', `Payment status: ${data.payment.status}`, data);
+    }
+
+  } catch (err) {
+    showResult('failure', 'Error', err.message, null);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Pay Now';
+  }
+}
+
+function showResult(type, title, msg, data) {
+  setStep(3);
+  document.getElementById('checkout-form').style.display = 'none';
+  document.getElementById('cf-frame').className = 'cf-frame';
+  document.getElementById('waiting').className = 'waiting';
+
+  const el = document.getElementById('result');
+  el.className = 'result active';
+  document.getElementById('result-icon').className = `result-icon ${type === 'success' ? 'ok' : 'fail'}`;
+  document.getElementById('result-icon').innerHTML = type === 'success' ? '&#10003;' : '&#10007;';
+  document.getElementById('result-title').textContent = title;
+  document.getElementById('result-msg').textContent = msg;
+  document.getElementById('result-detail').textContent = data ? JSON.stringify(data, null, 2) : '';
+}
+
+function reset() {
+  setStep(1);
+  document.getElementById('checkout-form').style.display = 'block';
+  document.getElementById('result').className = 'result';
+  document.getElementById('cf-frame').className = 'cf-frame';
+  document.getElementById('waiting').className = 'waiting';
+  currentPayment = null;
+  loadSavedCards(); // Refresh saved cards (might have saved one during payment)
+}
+
+// --- Init ---
+loadSavedCards();
+</script>
+</body>
+</html>

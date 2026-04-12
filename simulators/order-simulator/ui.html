@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Payment Service — Simulator</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; padding: 20px; color: #333; }
+  h1 { margin-bottom: 4px; font-size: 22px; }
+  .subtitle { color: #64748b; margin-bottom: 20px; font-size: 13px; }
+
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1400px; margin: 0 auto; }
+  .column { display: flex; flex-direction: column; gap: 16px; }
+  .panel { background: white; border-radius: 8px; padding: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .panel-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 3px 8px; border-radius: 4px; }
+  .label-customer { background: #dbeafe; color: #1d4ed8; }
+  .label-order { background: #dcfce7; color: #16a34a; }
+  h2 { font-size: 15px; color: #555; }
+  h3 { font-size: 13px; color: #777; margin-bottom: 6px; }
+  label { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 500; }
+  select, input { width: 100%; padding: 7px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; margin-bottom: 8px; }
+  button { padding: 7px 12px; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: #2563eb; color: white; width: 100%; padding: 10px; font-size: 14px; }
+  .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+  .btn-sm { padding: 4px 10px; font-size: 11px; margin: 0 2px; }
+  .btn-green { background: #16a34a; color: white; }
+  .btn-green:hover:not(:disabled) { background: #15803d; }
+  .btn-red { background: #dc2626; color: white; }
+  .btn-red:hover:not(:disabled) { background: #b91c1c; }
+  .btn-orange { background: #ea580c; color: white; }
+  .btn-orange:hover:not(:disabled) { background: #c2410c; }
+  .btn-purple { background: #7c3aed; color: white; }
+  .btn-purple:hover:not(:disabled) { background: #6d28d9; }
+  .btn-outline { background: white; color: #555; border: 1px solid #ddd; }
+  .btn-outline:hover:not(:disabled) { background: #f8fafc; }
+
+  .checkbox-row { display: flex; align-items: center; gap: 5px; margin-bottom: 6px; font-size: 12px; }
+  .checkbox-row input { width: auto; margin: 0; }
+  .hint { font-size: 11px; color: #94a3b8; margin-bottom: 6px; }
+  .section-divider { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
+
+  .badge { padding: 3px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; display: inline-block; white-space: nowrap; }
+  .badge-AUTHORIZED, .badge-AWAITING_RESTAURANT { background: #dbeafe; color: #1d4ed8; }
+  .badge-CAPTURED, .badge-CONFIRMED { background: #dcfce7; color: #16a34a; }
+  .badge-FAILED, .badge-PAYMENT_FAILED { background: #fee2e2; color: #dc2626; }
+  .badge-VOIDED, .badge-CANCELLED { background: #f3e8ff; color: #7c3aed; }
+  .badge-REFUNDED { background: #fef3c7; color: #d97706; }
+  .badge-AWAITING_3DS { background: #fff7ed; color: #ea580c; }
+  .badge-CREATED, .badge-PENDING_PAYMENT { background: #f1f5f9; color: #64748b; }
+
+  /* Customer status area */
+  .customer-status { padding: 14px; border-radius: 8px; display: none; text-align: center; }
+  .customer-status.success { background: #dcfce7; border: 1px solid #86efac; display: block; }
+  .customer-status.failure { background: #fee2e2; border: 1px solid #fca5a5; display: block; }
+  .customer-status.pending { background: #fff7ed; border: 1px solid #fed7aa; display: block; }
+  .customer-status.waiting { background: #f0f9ff; border: 1px solid #bae6fd; display: block; }
+  .customer-status h3 { text-align: center; margin-bottom: 6px; color: inherit; }
+  .customer-status p { font-size: 13px; color: #475569; }
+
+  /* 3DS bank simulation */
+  .bank-sim { display: none; background: #f8fafc; border: 2px solid #1e40af; border-radius: 8px; padding: 20px; text-align: center; }
+  .bank-sim.active { display: block; }
+  .bank-logo { font-size: 18px; font-weight: 700; color: #1e40af; margin-bottom: 4px; }
+  .bank-subtitle { color: #64748b; font-size: 12px; margin-bottom: 12px; }
+  .bank-amount { font-size: 24px; font-weight: 700; margin-bottom: 12px; }
+  .bank-info { font-size: 12px; color: #475569; margin-bottom: 12px; padding: 10px; background: white; border-radius: 6px; }
+  .sms-input { text-align: center; font-size: 20px; letter-spacing: 6px; margin-bottom: 12px; }
+  .bank-actions { display: flex; gap: 8px; }
+  .bank-actions button { flex: 1; padding: 10px; font-size: 13px; }
+
+  /* Order cards */
+  .order-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
+  .order-card:hover { border-color: #cbd5e1; }
+  .order-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .order-id { font-family: monospace; font-size: 11px; color: #475569; }
+  .order-amount { font-weight: 700; font-size: 14px; }
+  .order-meta { font-size: 11px; color: #94a3b8; margin-bottom: 6px; }
+  .order-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+  .order-attempts { margin-top: 6px; font-size: 11px; color: #64748b; }
+  .order-attempts .attempt { padding: 2px 0; border-top: 1px solid #f1f5f9; }
+  .no-orders { text-align: center; padding: 24px; color: #94a3b8; font-size: 13px; }
+
+  /* Event log */
+  .event-log { max-height: 250px; overflow-y: auto; font-size: 11px; }
+  .event { padding: 5px 7px; margin-bottom: 4px; border-radius: 4px; border-left: 3px solid #ddd; background: #fafafa; }
+  .event.rabbitmq { border-left-color: #f59e0b; }
+  .event.api { border-left-color: #2563eb; }
+  .event.duplicate { border-left-color: #a855f7; background: #faf5ff; }
+  .event.concurrent { border-left-color: #ec4899; background: #fdf2f8; }
+  .event-header { font-weight: 600; font-size: 11px; }
+  .event-body { font-family: monospace; font-size: 10px; white-space: pre-wrap; word-break: break-all; color: #666; max-height: 100px; overflow-y: auto; }
+
+  /* Payments DB table */
+  .db-panel { max-width: 1400px; margin: 20px auto 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; text-transform: uppercase; }
+  td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+  .mono { font-family: monospace; font-size: 11px; color: #475569; }
+</style>
+</head>
+<body>
+<h1>Payment Service Simulator</h1>
+<p class="subtitle">Left: what the customer sees. Right: what the Order Service does.</p>
+
+<div class="layout">
+  <!-- LEFT: Customer View -->
+  <div class="column">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Checkout</h2>
+        <span class="panel-label label-customer">Customer View</span>
+      </div>
+
+      <!-- Card form -->
+      <div id="checkout-form">
+        <label>Card</label>
+        <select id="card-select">
+          <option value="5528790000000008">**** 0008 (MC/Halkbank) - will approve</option>
+          <option value="5400360000000003">**** 0003 (MC/Garanti) - will approve</option>
+          <option value="4543590000000006">**** 0006 (Visa/IsBankasi) - will approve</option>
+          <option value="4111111111111129">**** 1129 (Test) - will decline</option>
+          <option value="tok_error">**** 9999 (Test) - provider error</option>
+        </select>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <div><label>Expire Month</label><input type="text" id="card-month" value="12" maxlength="2"></div>
+          <div><label>Expire Year</label><input type="text" id="card-year" value="2030" maxlength="4"></div>
+        </div>
+        <label>CVC</label>
+        <input type="text" id="card-cvc" value="123" maxlength="4">
+        <label>Card Holder</label>
+        <input type="text" id="card-holder" value="Test User">
+        <label>Amount (TRY)</label>
+        <input type="number" id="amount" value="50.00" step="0.01" min="1">
+
+        <hr class="section-divider">
+        <h3>Demo Options</h3>
+        <div class="checkbox-row">
+          <input type="checkbox" id="reuse-order">
+          <label for="reuse-order">Same order (retry with different card)</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="reuse-idem">
+          <label for="reuse-idem">Same idempotency key (duplicate request)</label>
+        </div>
+        <div id="reuse-info" style="display:none">
+          <div class="hint" id="reuse-order-info"></div>
+          <div class="hint" id="reuse-idem-info"></div>
+        </div>
+
+        <button class="btn-primary" id="btn-pay" onclick="pay()">Pay Now</button>
+      </div>
+
+      <!-- 3DS bank page -->
+      <div class="bank-sim" id="bank-sim">
+        <div class="bank-logo">3D Secure Verification</div>
+        <div class="bank-subtitle">Your bank requires additional verification</div>
+        <div class="bank-amount" id="bank-amount"></div>
+        <div class="bank-info">
+          SMS code sent to your phone ending in **42.<br>
+          Enter the code to confirm payment.
+        </div>
+        <input class="sms-input" id="sms-code" maxlength="6" placeholder="------" value="123456">
+        <div class="bank-actions">
+          <button class="btn-green" onclick="complete3DS(true)">Confirm Payment</button>
+          <button class="btn-red" onclick="complete3DS(false)">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Customer status -->
+      <div class="customer-status" id="customer-status">
+        <h3 id="cs-title"></h3>
+        <p id="cs-msg"></p>
+        <button class="btn-outline" style="margin-top:10px;" onclick="resetCheckout()">New Payment</button>
+      </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="panel">
+      <h2>Event Log</h2>
+      <div class="event-log" id="event-log"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Order Service View -->
+  <div class="column">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Orders</h2>
+        <span class="panel-label label-order">Order Service View</span>
+      </div>
+      <div id="orders-list">
+        <div class="no-orders">No orders yet. Customer needs to pay first.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DB View -->
+<div class="db-panel panel">
+  <div class="panel-header">
+    <h2>Database — payments table</h2>
+    <button class="btn-outline btn-sm" onclick="loadPayments()">Refresh</button>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Payment ID</th><th>Order ID</th><th>Amount</th><th>Status</th><th>Provider TX</th><th>Created</th></tr>
+    </thead>
+    <tbody id="payments-tbody">
+      <tr><td colspan="6" style="text-align:center;padding:20px;color:#94a3b8;">No payments yet.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+let lastOrderId = null;
+let lastIdempotencyKey = null;
+let currentPayment = null;
+let current3DSData = null; // { providerPaymentId, conversationData } or threeDSHtmlContent
+
+// --- SSE ---
+const evtSource = new EventSource('/events');
+evtSource.onmessage = (e) => {
+  const event = JSON.parse(e.data);
+  if (event.type === 'order_update') {
+    renderOrders();
+  } else {
+    addEventToLog(event);
+    // Auto-refresh DB view
+    loadPayments();
+  }
+};
+
+// --- Event Log ---
+function addEventToLog(event) {
+  const log = document.getElementById('event-log');
+  const div = document.createElement('div');
+  let cssClass = 'api';
+  let header = '';
+  let body = '';
+
+  if (event.type === 'rabbitmq_event') {
+    cssClass = 'rabbitmq';
+    header = `RMQ ${event.routingKey}`;
+    body = JSON.stringify(event.payload, null, 2);
+
+    // If 3DS completed via RabbitMQ, update customer view
+    if (event.routingKey === 'payment.authorized' && currentPayment &&
+        event.payload.paymentId === currentPayment.id) {
+      showCustomerStatus('success', 'Payment Successful',
+        'Your payment has been authorized. Waiting for restaurant confirmation.');
+    } else if (event.routingKey === 'payment.failed' && currentPayment &&
+        event.payload.paymentId === currentPayment.id) {
+      showCustomerStatus('failure', 'Payment Failed',
+        '3D Secure verification failed. Please try again.');
+    }
+  } else if (event.type === 'api_call') {
+    if (event.isDuplicate) {
+      cssClass = 'duplicate';
+      header = `IDEMPOTENT ${event.method} [${event.status}] cached`;
+    } else if (String(event.status).includes('/')) {
+      cssClass = 'concurrent';
+      header = `${event.method} [${event.status}]`;
+    } else {
+      header = `${event.method} [${event.status}]`;
+    }
+    body = JSON.stringify(event.response, null, 2);
+  }
+
+  div.className = `event ${cssClass}`;
+  div.innerHTML = `<div class="event-header">${header}</div><details><summary style="font-size:10px;color:#94a3b8;cursor:pointer;">details</summary><div class="event-body">${body}</div></details>`;
+  log.prepend(div);
+}
+
+// --- Customer: Pay ---
+async function pay() {
+  const btn = document.getElementById('btn-pay');
+  btn.disabled = true;
+  btn.textContent = 'Processing...';
+
+  const reuseOrder = document.getElementById('reuse-order').checked;
+  const reuseIdem = document.getElementById('reuse-idem').checked;
+
+  const amountTRY = parseFloat(document.getElementById('amount').value);
+  const amountKurus = Math.round(amountTRY * 100);
+
+  const cardNumber = document.getElementById('card-select').value;
+  const payload = {
+    card: {
+      cardNumber,
+      expireMonth: document.getElementById('card-month').value,
+      expireYear: document.getElementById('card-year').value,
+      cvc: document.getElementById('card-cvc').value,
+      cardHolderName: document.getElementById('card-holder').value,
+    },
+    amount: amountKurus,
+  };
+
+  if (reuseOrder && lastOrderId) payload.orderId = lastOrderId;
+  if (reuseIdem && lastIdempotencyKey) payload.idempotencyKey = lastIdempotencyKey;
+
+  try {
+    const res = await fetch('/api/create-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    currentPayment = data.payment;
+    lastOrderId = data.orderId;
+    lastIdempotencyKey = data.idempotencyKey;
+    updateReuseInfo();
+
+    // Uncheck after use
+    document.getElementById('reuse-order').checked = false;
+    document.getElementById('reuse-idem').checked = false;
+
+    if (data.payment.status === 'AWAITING_3DS') {
+      current3DSData = data.threeDSRedirect;
+      document.getElementById('bank-amount').textContent = `${amountTRY.toFixed(2)} TRY`;
+      document.getElementById('checkout-form').style.display = 'none';
+      document.getElementById('bank-sim').classList.add('active');
+    } else if (data.payment.status === 'AUTHORIZED') {
+      showCustomerStatus('waiting', 'Payment Authorized',
+        'Your card has been charged. Waiting for restaurant to confirm your order...');
+    } else if (data.payment.status === 'FAILED') {
+      showCustomerStatus('failure', 'Payment Failed',
+        data.payment.failureReason || 'Your card was declined.');
+    } else if (res.status === 200 && reuseIdem) {
+      showCustomerStatus('success', 'Duplicate Request Detected',
+        'This is a cached response from a previous request. No new payment was created.');
+    }
+
+    renderOrders();
+    loadPayments();
+  } catch (err) {
+    showCustomerStatus('failure', 'Error', err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Pay Now';
+  }
+}
+
+// --- Customer: 3DS ---
+async function complete3DS(approve) {
+  document.getElementById('bank-sim').classList.remove('active');
+
+  // Show waiting state — the result will come via RabbitMQ
+  showCustomerStatus('pending', 'Verifying...',
+    'Your bank is processing the verification. Please wait...');
+
+  // For mock provider, use providerTxId stored on payment; for iyzico the 3DS HTML handles redirect
+  const callbackBody = approve
+    ? { providerPaymentId: currentPayment.providerTxId, conversationData: 'mock_conv_approve' }
+    : { providerPaymentId: currentPayment.providerTxId, conversationData: 'mock_conv_fail' };
+
+  try {
+    const res = await fetch(`/api/3ds-callback/${currentPayment.id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(callbackBody),
+    });
+    const data = await res.json();
+    currentPayment = data.payment;
+    // Status update will arrive via RabbitMQ event → SSE → handled in addEventToLog
+  } catch (err) {
+    showCustomerStatus('failure', 'Error', err.message);
+  }
+}
+
+function showCustomerStatus(type, title, msg) {
+  const el = document.getElementById('customer-status');
+  el.className = `customer-status ${type}`;
+  document.getElementById('cs-title').textContent = title;
+  document.getElementById('cs-msg').textContent = msg;
+  document.getElementById('checkout-form').style.display = 'none';
+  document.getElementById('bank-sim').classList.remove('active');
+}
+
+function resetCheckout() {
+  document.getElementById('customer-status').className = 'customer-status';
+  document.getElementById('customer-status').style.display = '';
+  document.getElementById('checkout-form').style.display = 'block';
+  document.getElementById('bank-sim').classList.remove('active');
+  currentPayment = null;
+  current3DSData = null;
+}
+
+function updateReuseInfo() {
+  document.getElementById('reuse-info').style.display = 'block';
+  document.getElementById('reuse-order-info').textContent = `Last Order: ${lastOrderId}`;
+  document.getElementById('reuse-idem-info').textContent = `Last Key: ${lastIdempotencyKey}`;
+}
+
+// --- Orders ---
+async function renderOrders() {
+  try {
+    const res = await fetch('/api/orders');
+    const { orders } = await res.json();
+    const list = document.getElementById('orders-list');
+
+    if (orders.length === 0) {
+      list.innerHTML = '<div class="no-orders">No orders yet. Customer needs to pay first.</div>';
+      return;
+    }
+
+    list.innerHTML = orders.map(o => {
+      const amount = (o.amount / 100).toFixed(2);
+      const actions = getOrderActions(o);
+      const attempts = o.attempts.length > 1
+        ? `<div class="order-attempts"><strong>${o.attempts.length} attempts:</strong>${o.attempts.map(a =>
+            `<div class="attempt">${a.paymentId.slice(0, 20)}... <span class="badge badge-${a.status}">${a.status}</span>${a.httpStatus === 200 && a.status !== 'FAILED' ? ' <span style="font-size:10px;color:#7c3aed;">(cached)</span>' : ''}</div>`
+          ).join('')}</div>`
+        : '';
+
+      return `<div class="order-card">
+        <div class="order-header">
+          <span class="order-id">${o.orderId}</span>
+          <span class="badge badge-${o.status}">${o.status}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="order-amount">${amount} TRY</span>
+          <span class="order-meta">${o.paymentId ? o.paymentId.slice(0,20) + '...' : '—'}</span>
+        </div>
+        <div class="order-meta">Payment: <span class="badge badge-${o.paymentStatus || 'CREATED'}">${o.paymentStatus || '—'}</span></div>
+        ${actions ? `<div class="order-actions">${actions}</div>` : ''}
+        ${attempts}
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.error('Failed to render orders:', err);
+  }
+}
+
+function getOrderActions(order) {
+  const btns = [];
+
+  if (order.status === 'AWAITING_RESTAURANT') {
+    btns.push(`<button class="btn-sm btn-green" onclick="restaurantConfirm('${order.paymentId}',${order.amount})">Restaurant Confirms</button>`);
+    btns.push(`<button class="btn-sm btn-red" onclick="restaurantReject('${order.paymentId}')">Restaurant Rejects</button>`);
+    btns.push(`<button class="btn-sm btn-purple" onclick="doubleCapture('${order.paymentId}',${order.amount})">Double Capture</button>`);
+  }
+
+  if (order.status === 'CONFIRMED') {
+    btns.push(`<button class="btn-sm btn-red" onclick="cancelPayment('${order.paymentId}')">Refund</button>`);
+  }
+
+  if (order.status === 'AWAITING_3DS') {
+    btns.push(`<span style="font-size:11px;color:#ea580c;">Waiting for customer 3DS...</span>`);
+  }
+
+  if (order.status === 'PAYMENT_FAILED') {
+    btns.push(`<button class="btn-sm btn-orange" onclick="retryOrder('${order.orderId}')">Retry (different card)</button>`);
+  }
+
+  return btns.join('');
+}
+
+async function restaurantConfirm(paymentId, amount) {
+  await fetch(`/api/capture/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  });
+  // Update customer view
+  showCustomerStatus('success', 'Order Confirmed!',
+    'The restaurant has accepted your order. Your payment is complete.');
+  renderOrders();
+  loadPayments();
+}
+
+async function restaurantReject(paymentId) {
+  await fetch(`/api/cancel/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: 'Restaurant rejected the order' }),
+  });
+  showCustomerStatus('failure', 'Order Rejected',
+    'The restaurant was unable to accept your order. Your payment has been released.');
+  renderOrders();
+  loadPayments();
+}
+
+async function doubleCapture(paymentId, amount) {
+  const res = await fetch(`/api/double-capture/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  });
+  const data = await res.json();
+  alert(
+    `Concurrent Capture Results:\n\n` +
+    `Request 1: HTTP ${data.result1.status} ${data.result1.status === 200 ? '(captured)' : '(rejected — ' + (data.result1.body?.error?.code || '') + ')'}\n` +
+    `Request 2: HTTP ${data.result2.status} ${data.result2.status === 200 ? '(captured)' : '(rejected — ' + (data.result2.body?.error?.code || '') + ')'}\n\n` +
+    `Optimistic locking: only one request succeeded.`
+  );
+  renderOrders();
+  loadPayments();
+}
+
+async function cancelPayment(paymentId) {
+  await fetch(`/api/cancel/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: 'Customer requested refund' }),
+  });
+  showCustomerStatus('failure', 'Payment Refunded',
+    'Your payment has been refunded.');
+  renderOrders();
+  loadPayments();
+}
+
+function retryOrder(orderId) {
+  resetCheckout();
+  document.getElementById('reuse-order').checked = true;
+  lastOrderId = orderId;
+  updateReuseInfo();
+  document.getElementById('card-select').value = '5528790000000008';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// --- DB Table ---
+async function loadPayments() {
+  try {
+    const res = await fetch('/api/payments');
+    const data = await res.json();
+    const tbody = document.getElementById('payments-tbody');
+    if (!data.payments || data.payments.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:#94a3b8;">No payments yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.payments.map(p => `<tr>
+      <td class="mono">${p.id}</td>
+      <td class="mono">${p.orderId}</td>
+      <td style="font-weight:600;">${(p.amount/100).toFixed(2)} ${p.currency}</td>
+      <td><span class="badge badge-${p.status}">${p.status}</span></td>
+      <td class="mono" style="font-size:10px;">${p.providerTxId || '—'}</td>
+      <td style="font-size:11px;color:#94a3b8;">${new Date(p.createdAt).toLocaleTimeString()}</td>
+    </tr>`).join('');
+  } catch (err) {
+    console.error('Failed to load payments:', err);
+  }
+}
+
+// Initial load
+renderOrders();
+loadPayments();
+</script>
+</body>
+</html>
