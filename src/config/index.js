@@ -8,7 +8,6 @@ module.exports = {
 
   // App config — all from .env, no competing defaults
   paymentProvider: process.env.PAYMENT_PROVIDER,
-  payment3dsEnabled: process.env.PAYMENT_3DS_ENABLED === 'true',
   skipAuth: process.env.SKIP_AUTH === 'true',
   jwtSecret: process.env.JWT_SECRET,
   apiBaseUrl: process.env.API_BASE_URL,

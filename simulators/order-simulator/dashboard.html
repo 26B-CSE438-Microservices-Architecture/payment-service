@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Service Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #1e293b; }
+
+  .header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 18px; }
+  .header-right { display: flex; align-items: center; gap: 16px; font-size: 12px; color: #64748b; }
+  .sse-indicator { display: flex; align-items: center; gap: 6px; }
+  .sse-dot { width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+  .sse-dot.ok { background: #16a34a; }
+  .link { color: #2563eb; text-decoration: none; font-weight: 500; }
+  .link:hover { text-decoration: underline; }
+
+  .layout { display: grid; grid-template-columns: 1fr 380px; gap: 20px; max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+  .panel { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid #e2e8f0; }
+  .panel-head { padding: 14px 16px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; }
+  .panel-head h2 { font-size: 14px; color: #475569; }
+  .panel-body { padding: 16px; }
+
+  /* Badge */
+  .badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; display: inline-block; white-space: nowrap; }
+  .badge-AUTHORIZED, .badge-AWAITING_RESTAURANT { background: #dbeafe; color: #1d4ed8; }
+  .badge-CAPTURED, .badge-CONFIRMED { background: #dcfce7; color: #16a34a; }
+  .badge-FAILED, .badge-PAYMENT_FAILED { background: #fee2e2; color: #dc2626; }
+  .badge-VOIDED, .badge-CANCELLED { background: #f3e8ff; color: #7c3aed; }
+  .badge-REFUNDED { background: #fef3c7; color: #d97706; }
+  .badge-AWAITING_FORM { background: #fff7ed; color: #ea580c; }
+  .badge-CREATED, .badge-PENDING_PAYMENT { background: #f1f5f9; color: #64748b; }
+
+  /* Order cards */
+  .order-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 10px; transition: border-color .15s; }
+  .order-card:hover { border-color: #cbd5e1; }
+  .order-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .order-id { font-family: monospace; font-size: 12px; color: #64748b; }
+  .order-amount { font-weight: 700; font-size: 16px; }
+  .order-meta { font-size: 12px; color: #94a3b8; margin-bottom: 8px; }
+  .order-meta code { font-family: monospace; font-size: 11px; background: #f8fafc; padding: 1px 4px; border-radius: 3px; }
+  .order-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .order-note { font-size: 12px; color: #ea580c; font-style: italic; }
+
+  .btn { padding: 6px 14px; border: none; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background .15s; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-green { background: #16a34a; color: #fff; }
+  .btn-green:hover:not(:disabled) { background: #15803d; }
+  .btn-red { background: #dc2626; color: #fff; }
+  .btn-red:hover:not(:disabled) { background: #b91c1c; }
+  .btn-purple { background: #7c3aed; color: #fff; }
+  .btn-purple:hover:not(:disabled) { background: #6d28d9; }
+  .btn-outline { background: #fff; color: #475569; border: 1px solid #e2e8f0; }
+  .btn-outline:hover:not(:disabled) { background: #f8fafc; }
+
+  .no-data { text-align: center; padding: 32px; color: #94a3b8; font-size: 13px; }
+
+  .attempts { margin-top: 8px; padding-top: 8px; border-top: 1px solid #f1f5f9; }
+  .attempt { font-size: 11px; color: #64748b; padding: 2px 0; display: flex; gap: 8px; align-items: center; }
+  .attempt code { font-family: monospace; font-size: 10px; }
+
+  /* Event log */
+  .event-log { max-height: calc(100vh - 200px); overflow-y: auto; }
+  .event { padding: 8px 10px; margin-bottom: 6px; border-radius: 6px; border-left: 3px solid #e2e8f0; background: #fafafa; font-size: 12px; }
+  .event.rabbitmq { border-left-color: #f59e0b; background: #fffbeb; }
+  .event.api { border-left-color: #2563eb; background: #eff6ff; }
+  .event.duplicate { border-left-color: #a855f7; background: #faf5ff; }
+  .event.concurrent { border-left-color: #ec4899; background: #fdf2f8; }
+  .event-header { font-weight: 600; margin-bottom: 2px; }
+  .event-time { font-size: 10px; color: #94a3b8; float: right; }
+  .event-body { font-family: monospace; font-size: 10px; white-space: pre-wrap; word-break: break-all; color: #64748b; max-height: 80px; overflow-y: auto; }
+
+  /* DB table */
+  .db-section { max-width: 1400px; margin: 0 auto; padding: 0 20px 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #e2e8f0; color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; }
+  .mono { font-family: monospace; font-size: 11px; color: #475569; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Order Service Dashboard</h1>
+  <div class="header-right">
+    <a class="link" href="/" target="_blank">Open Checkout</a>
+    <div class="sse-indicator">
+      <span class="sse-dot" id="sse-dot"></span>
+      <span id="sse-status">Connecting...</span>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- Orders column -->
+  <div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Orders</h2>
+        <button class="btn btn-outline" onclick="renderOrders()">Refresh</button>
+      </div>
+      <div class="panel-body" id="orders-list">
+        <div class="no-data">No orders yet. Open checkout to create a payment.</div>
+      </div>
+    </div>
+
+    <!-- DB table -->
+    <div class="panel" style="margin-top:20px;">
+      <div class="panel-head">
+        <h2>Payments (Database)</h2>
+        <button class="btn btn-outline" onclick="loadPayments()">Refresh</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr><th>Payment ID</th><th>Order ID</th><th>Amount</th><th>Status</th><th>Provider TX</th><th>Created</th></tr>
+          </thead>
+          <tbody id="payments-tbody">
+            <tr><td colspan="6" class="no-data">No payments yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Event log column -->
+  <div>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Event Feed</h2>
+        <button class="btn btn-outline" onclick="clearLog()">Clear</button>
+      </div>
+      <div class="panel-body event-log" id="event-log">
+        <div class="no-data">Waiting for events...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- SSE ---
+const evtSource = new EventSource('/events');
+evtSource.onopen = () => {
+  document.getElementById('sse-dot').className = 'sse-dot ok';
+  document.getElementById('sse-status').textContent = 'Live';
+};
+evtSource.onerror = () => {
+  document.getElementById('sse-dot').className = 'sse-dot';
+  document.getElementById('sse-status').textContent = 'Disconnected';
+};
+evtSource.onmessage = (e) => {
+  const event = JSON.parse(e.data);
+  if (event.type === 'order_update') {
+    renderOrders();
+  } else {
+    addEvent(event);
+    loadPayments();
+  }
+};
+
+// --- Event log ---
+let firstEvent = true;
+function addEvent(event) {
+  const log = document.getElementById('event-log');
+  if (firstEvent) { log.innerHTML = ''; firstEvent = false; }
+
+  const div = document.createElement('div');
+  const time = new Date().toLocaleTimeString();
+  let cssClass = 'api';
+  let header = '';
+  let body = '';
+
+  if (event.type === 'rabbitmq_event') {
+    cssClass = 'rabbitmq';
+    header = `RMQ: ${event.routingKey}`;
+    body = JSON.stringify(event.payload, null, 2);
+  } else if (event.type === 'api_call') {
+    if (event.isDuplicate) {
+      cssClass = 'duplicate';
+      header = `${event.method} [${event.status}] idempotent/cached`;
+    } else if (String(event.status).includes('/')) {
+      cssClass = 'concurrent';
+      header = `${event.method} [${event.status}]`;
+    } else {
+      header = `${event.method} [${event.status}]`;
+    }
+    body = JSON.stringify(event.response, null, 2);
+  }
+
+  div.className = `event ${cssClass}`;
+  div.innerHTML = `<div class="event-header">${header}<span class="event-time">${time}</span></div>
+    <details><summary style="font-size:10px;color:#94a3b8;cursor:pointer;">payload</summary><div class="event-body">${body}</div></details>`;
+  log.prepend(div);
+}
+
+function clearLog() {
+  document.getElementById('event-log').innerHTML = '<div class="no-data">Cleared. Waiting for events...</div>';
+  firstEvent = true;
+}
+
+// --- Orders ---
+async function renderOrders() {
+  try {
+    const res = await fetch('/api/orders');
+    const { orders } = await res.json();
+    const list = document.getElementById('orders-list');
+
+    if (orders.length === 0) {
+      list.innerHTML = '<div class="no-data">No orders yet. Open checkout to create a payment.</div>';
+      return;
+    }
+
+    list.innerHTML = orders.map(o => {
+      const amount = (o.amount / 100).toFixed(2);
+      const actions = buildActions(o);
+      const attempts = o.attempts.length > 1
+        ? `<div class="attempts"><strong style="font-size:11px;">Attempts (${o.attempts.length}):</strong>${o.attempts.map(a =>
+            `<div class="attempt"><code>${a.paymentId.slice(0, 24)}...</code> <span class="badge badge-${a.status}">${a.status}</span></div>`
+          ).join('')}</div>`
+        : '';
+
+      return `<div class="order-card">
+        <div class="order-top">
+          <span class="order-id">${o.orderId}</span>
+          <span class="badge badge-${o.status}">${o.status}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="order-amount">${amount} TRY</span>
+        </div>
+        <div class="order-meta">
+          Payment: <code>${o.paymentId || '-'}</code>
+          <span class="badge badge-${o.paymentStatus || 'CREATED'}">${o.paymentStatus || '-'}</span>
+        </div>
+        ${actions}
+        ${attempts}
+      </div>`;
+    }).join('');
+  } catch (err) {
+    console.error('Failed to render orders:', err);
+  }
+}
+
+function buildActions(order) {
+  const btns = [];
+
+  if (order.status === 'AWAITING_RESTAURANT') {
+    btns.push(`<button class="btn btn-green" onclick="capture('${order.paymentId}',${order.amount})">Restaurant Confirms</button>`);
+    btns.push(`<button class="btn btn-red" onclick="cancel('${order.paymentId}','Restaurant rejected')">Restaurant Rejects</button>`);
+    btns.push(`<button class="btn btn-purple" onclick="doubleCapture('${order.paymentId}',${order.amount})">Double Capture Test</button>`);
+  }
+
+  if (order.status === 'CONFIRMED') {
+    btns.push(`<button class="btn btn-red" onclick="cancel('${order.paymentId}','Customer requested refund')">Refund</button>`);
+  }
+
+  if (order.status === 'AWAITING_FORM') {
+    return `<div class="order-note">Waiting for customer to complete the payment form...</div>`;
+  }
+
+  if (order.status === 'PAYMENT_FAILED') {
+    btns.push(`<span style="font-size:12px;color:#dc2626;">Payment failed. Customer can retry from checkout.</span>`);
+  }
+
+  if (btns.length === 0) return '';
+  return `<div class="order-actions">${btns.join('')}</div>`;
+}
+
+async function capture(paymentId, amount) {
+  await fetch(`/api/capture/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  });
+  renderOrders();
+  loadPayments();
+}
+
+async function cancel(paymentId, reason) {
+  await fetch(`/api/cancel/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+  renderOrders();
+  loadPayments();
+}
+
+async function doubleCapture(paymentId, amount) {
+  const res = await fetch(`/api/double-capture/${paymentId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount }),
+  });
+  const data = await res.json();
+  alert(
+    `Concurrent Capture Test:\n\n` +
+    `Request 1: HTTP ${data.result1.status} ${data.result1.status === 200 ? '(captured)' : '(rejected)'}\n` +
+    `Request 2: HTTP ${data.result2.status} ${data.result2.status === 200 ? '(captured)' : '(rejected)'}\n\n` +
+    `Only one should succeed (optimistic locking).`
+  );
+  renderOrders();
+  loadPayments();
+}
+
+// --- Payments DB table ---
+async function loadPayments() {
+  try {
+    const res = await fetch('/api/payments');
+    const data = await res.json();
+    const tbody = document.getElementById('payments-tbody');
+    if (!data.payments || data.payments.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" class="no-data">No payments yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.payments.map(p => `<tr>
+      <td class="mono">${p.id}</td>
+      <td class="mono">${p.orderId}</td>
+      <td style="font-weight:600;">${(p.amount/100).toFixed(2)} ${p.currency}</td>
+      <td><span class="badge badge-${p.status}">${p.status}</span></td>
+      <td class="mono" style="font-size:10px;">${p.providerTxId || '-'}</td>
+      <td style="font-size:11px;color:#94a3b8;">${new Date(p.createdAt).toLocaleTimeString()}</td>
+    </tr>`).join('');
+  } catch (err) {
+    console.error('Failed to load payments:', err);
+  }
+}
+
+// Initial load
+renderOrders();
+loadPayments();
+</script>
+</body>
+</html>

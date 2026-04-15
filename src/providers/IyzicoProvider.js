@@ -10,45 +10,60 @@ class IyzicoProvider {
     });
   }
 
-  async authorize({ amount, currency, card, buyer, items, paymentId, callbackUrl, registerCard }) {
-    const request = this._buildRequest({ amount, currency, card, buyer, items, paymentId, registerCard });
+  // Checkout Form — new card payment initialization (pre-auth)
+  async initCheckoutForm({ paymentId, amount, currency, buyer, items, callbackUrl }) {
+    this._warnMissingFields(buyer, items);
 
-    if (config.payment3dsEnabled) {
-      if (!callbackUrl) {
-        throw new Error('callbackUrl is required when 3DS is enabled');
-      }
-      request.callbackUrl = callbackUrl;
-      return this._initiate3DS(request);
-    }
+    const priceStr = this._formatPrice(amount);
 
-    return this._directPreAuth(request);
-  }
-
-  async complete3DS({ providerPaymentId, conversationData }) {
-    const result = await this._call('threedsPayment', 'create', {
+    const request = {
       locale: Iyzipay.LOCALE.TR,
-      paymentId: providerPaymentId,
-      conversationData,
-    });
+      conversationId: paymentId || undefined,
+      price: priceStr,
+      paidPrice: priceStr,
+      currency: currency || Iyzipay.CURRENCY.TRY,
+      basketId: paymentId || 'B1',
+      paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
+      callbackUrl,
+      buyer: this._mapBuyer(buyer),
+      shippingAddress: this._mapAddress(buyer?.shippingAddress || buyer),
+      billingAddress: this._mapAddress(buyer?.billingAddress || buyer),
+      basketItems: this._mapBasketItems(items, amount),
+    };
+
+    const result = await this._call('checkoutFormInitializePreAuth', 'create', request);
 
     if (result.status === 'success') {
-      const response = {
+      return {
+        token: result.token,
+        content: result.checkoutFormContent,
+        paymentPageUrl: result.paymentPageUrl || null,
+      };
+    }
+
+    const error = new Error(result.errorMessage || 'Checkout form initialization failed');
+    error.code = 'CHECKOUT_FORM_INIT_FAILED';
+    throw error;
+  }
+
+  // Checkout Form — retrieve result after user completes the form
+  async retrieveCheckoutForm(token) {
+    const result = await this._call('checkoutForm', 'retrieve', {
+      locale: Iyzipay.LOCALE.TR,
+      token,
+    });
+
+    if (result.status === 'success' && result.paymentStatus === 'SUCCESS') {
+      return {
         success: true,
         providerTxId: String(result.paymentId),
         itemTransactions: this._extractItemTransactions(result),
       };
-      if (result.cardUserKey) response.cardUserKey = result.cardUserKey;
-      if (result.cardToken) response.cardToken = result.cardToken;
-      if (result.binNumber) response.last4 = result.lastFourDigits || result.binNumber.slice(-4);
-      if (result.cardAssociation) response.cardAssociation = result.cardAssociation;
-      if (result.cardType) response.cardType = result.cardType;
-      if (result.cardFamily) response.cardBankName = result.cardFamily;
-      return response;
     }
 
     return {
       success: false,
-      failureReason: result.errorMessage || '3ds_authentication_failed',
+      failureReason: result.errorMessage || result.paymentStatus || 'checkout_form_failed',
     };
   }
 
@@ -122,128 +137,7 @@ class IyzicoProvider {
     return { success: true };
   }
 
-  async registerCard({ card, email, cardUserKey, cardAlias }) {
-    const request = {
-      locale: Iyzipay.LOCALE.TR,
-      email: email || 'noreply@example.com',
-      cardAlias: cardAlias || 'Card',
-      cardHolderName: card.cardHolderName,
-      cardNumber: card.cardNumber,
-      expireMonth: card.expireMonth,
-      expireYear: card.expireYear,
-    };
-    if (cardUserKey) request.cardUserKey = cardUserKey;
-
-    const result = await this._call('card', 'create', request);
-
-    if (result.status !== 'success') {
-      throw new Error(result.errorMessage || 'Card registration failed');
-    }
-
-    return {
-      cardUserKey: result.cardUserKey,
-      cardToken: result.cardToken,
-      last4: result.lastFourDigits || (card.cardNumber || '').slice(-4),
-      cardAssociation: result.cardAssociation || null,
-      cardType: result.cardType || null,
-      cardBankName: result.cardBankName || null,
-    };
-  }
-
-  async deleteCard({ cardUserKey, cardToken }) {
-    const result = await this._call('card', 'delete', {
-      locale: Iyzipay.LOCALE.TR,
-      cardUserKey,
-      cardToken,
-    });
-
-    if (result.status !== 'success') {
-      throw new Error(result.errorMessage || 'Card deletion failed');
-    }
-
-    return { success: true };
-  }
-
   // --- Internal helpers ---
-
-  async _directPreAuth(request) {
-    const result = await this._call('paymentPreAuth', 'create', request);
-
-    if (result.status === 'success') {
-      const response = {
-        type: 'direct',
-        success: true,
-        providerTxId: String(result.paymentId),
-        itemTransactions: this._extractItemTransactions(result),
-      };
-      if (result.cardUserKey) response.cardUserKey = result.cardUserKey;
-      if (result.cardToken) response.cardToken = result.cardToken;
-      if (result.binNumber) response.last4 = result.lastFourDigits || result.binNumber.slice(-4);
-      if (result.cardAssociation) response.cardAssociation = result.cardAssociation;
-      if (result.cardType) response.cardType = result.cardType;
-      if (result.cardFamily) response.cardBankName = result.cardFamily;
-      return response;
-    }
-
-    return {
-      type: 'direct',
-      success: false,
-      failureReason: result.errorMessage || 'payment_declined',
-    };
-  }
-
-  async _initiate3DS(request) {
-    const result = await this._call('threedsInitializePreAuth', 'create', request);
-
-    if (result.status === 'success') {
-      return {
-        type: '3ds_redirect',
-        threeDSHtmlContent: result.threeDSHtmlContent,
-        providerPaymentId: result.paymentId ? String(result.paymentId) : undefined,
-      };
-    }
-
-    return {
-      type: 'direct',
-      success: false,
-      failureReason: result.errorMessage || '3ds_initialization_failed',
-    };
-  }
-
-  _buildRequest({ amount, currency, card, buyer, items, paymentId, registerCard }) {
-    this._warnMissingFields(buyer, items);
-
-    const priceStr = this._formatPrice(amount);
-
-    // Saved card: use cardUserKey + cardToken instead of raw card details
-    const paymentCard = card.cardToken
-      ? { cardUserKey: card.cardUserKey, cardToken: card.cardToken }
-      : {
-          cardHolderName: card.cardHolderName || 'Unknown',
-          cardNumber: card.cardNumber,
-          expireMonth: card.expireMonth,
-          expireYear: card.expireYear,
-          cvc: card.cvc,
-          registerCard: registerCard || '0',
-        };
-
-    return {
-      locale: Iyzipay.LOCALE.TR,
-      conversationId: paymentId || undefined,
-      price: priceStr,
-      paidPrice: priceStr,
-      currency: currency || Iyzipay.CURRENCY.TRY,
-      installment: '1',
-      basketId: paymentId || 'B1',
-      paymentChannel: Iyzipay.PAYMENT_CHANNEL.WEB,
-      paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
-      paymentCard,
-      buyer: this._mapBuyer(buyer),
-      shippingAddress: this._mapAddress(buyer?.shippingAddress || buyer),
-      billingAddress: this._mapAddress(buyer?.billingAddress || buyer),
-      basketItems: this._mapBasketItems(items, amount),
-    };
-  }
 
   _mapBuyer(buyer = {}) {
     return {
@@ -285,7 +179,6 @@ class IyzicoProvider {
       }));
     }
 
-    // Fallback: single basket item with the full amount
     return [{
       id: 'ITEM_DEFAULT',
       name: 'Order Payment',
@@ -305,7 +198,6 @@ class IyzicoProvider {
   }
 
   _formatPrice(amountInMinorUnits) {
-    // Our system stores amount in minor units (kuruş), iyzico wants major units (TL) as string
     return (amountInMinorUnits / 100).toFixed(2);
   }
 
