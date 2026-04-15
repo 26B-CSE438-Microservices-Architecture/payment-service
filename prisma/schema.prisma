@@ -49,19 +49,3 @@ model PaymentEvent {
   @@map("payment_events")
 }
 
-model SavedCard {
-  id              String   @id @db.VarChar(50)
-  userId          String   @map("user_id") @db.VarChar(50)
-  cardUserKey     String   @map("card_user_key") @db.VarChar(100)
-  cardToken       String   @map("card_token") @db.VarChar(100)
-  last4           String   @db.VarChar(4)
-  cardType        String?  @map("card_type") @db.VarChar(20)
-  cardAssociation String?  @map("card_association") @db.VarChar(20)
-  cardBankName    String?  @map("card_bank_name") @db.VarChar(100)
-  cardAlias       String?  @map("card_alias") @db.VarChar(100)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz()
-
-  @@unique([userId, cardToken], map: "uq_saved_cards_user_token")
-  @@index([userId], map: "idx_saved_cards_user_id")
-  @@map("saved_cards")
-}

@@ -5,12 +5,11 @@ const { assertTransition } = require('./PaymentStateMachine');
 const publisher = require('../queue/publisher');
 
 class PaymentService {
-  constructor(provider, cardService) {
+  constructor(provider) {
     this.provider = provider;
-    this.cardService = cardService;
   }
 
-  async createPayment({ idempotencyKey, orderId, userId, amount, currency, paymentMethod, buyer, items, callbackUrl: inputCallbackUrl, savedCardId }) {
+  async createPayment({ idempotencyKey, orderId, userId, amount, currency, paymentMethod, buyer, items, callbackUrl: inputCallbackUrl }) {
     // 1. Idempotency check
     const existing = await prisma.payment.findUnique({
       where: { idempotencyKey },
@@ -49,66 +48,7 @@ class PaymentService {
       },
     });
 
-    // 4. Branch: saved card (direct NON3D) vs new card (Checkout Form)
-    if (savedCardId) {
-      return this._handleSavedCardPayment(payment, { userId, amount, currency, buyer, items, savedCardId });
-    }
-
-    return this._handleCheckoutFormPayment(payment, { amount, currency, buyer, items, callbackUrl: inputCallbackUrl });
-  }
-
-  async _handleSavedCardPayment(payment, { userId, amount, currency, buyer, items, savedCardId }) {
-    const resolvedCard = await this.cardService.getCardForPayment(userId, savedCardId);
-
-    let result;
-    try {
-      result = await this.provider.authorize({
-        amount,
-        currency: currency || 'TRY',
-        card: resolvedCard,
-        buyer,
-        items,
-        paymentId: payment.id,
-      });
-    } catch (err) {
-      const updated = await this._transitionPayment(payment.id, 'CREATED', 'FAILED', {
-        failureReason: err.message,
-      });
-      await this._logEvent(payment.id, 'CREATED', 'FAILED', 'system', { error: err.message });
-      publisher.publish('payment.failed', this._eventPayload(updated));
-      return { payment: updated };
-    }
-
-    if (result.success) {
-      const updatedMetadata = {
-        ...(payment.metadata || {}),
-        itemTransactions: result.itemTransactions || [],
-      };
-      const updated = await this._transitionPayment(payment.id, 'CREATED', 'AUTHORIZED', {
-        providerTxId: result.providerTxId,
-        authorizedAt: new Date(),
-        metadata: updatedMetadata,
-      });
-      await this._logEvent(payment.id, 'CREATED', 'AUTHORIZED', 'system', {
-        providerTxId: result.providerTxId,
-      });
-      publisher.publish('payment.authorized', this._eventPayload(updated));
-      return { payment: updated };
-    }
-
-    // Direct failure
-    const updated = await this._transitionPayment(payment.id, 'CREATED', 'FAILED', {
-      failureReason: result.failureReason,
-    });
-    await this._logEvent(payment.id, 'CREATED', 'FAILED', 'system', {
-      reason: result.failureReason,
-    });
-    publisher.publish('payment.failed', this._eventPayload(updated));
-    return { payment: updated };
-  }
-
-  async _handleCheckoutFormPayment(payment, { amount, currency, buyer, items, callbackUrl: inputCallbackUrl }) {
-    // Build callback URL — always required for CF
+    // 4. Initialize Checkout Form
     let callbackUrl;
     if (inputCallbackUrl) {
       callbackUrl = inputCallbackUrl.replace('{paymentId}', payment.id);
@@ -135,7 +75,6 @@ class PaymentService {
       return { payment: updated };
     }
 
-    // Store CF token in metadata for the callback step
     const updatedMetadata = {
       ...(payment.metadata || {}),
       checkoutFormToken: formResult.token,
@@ -169,7 +108,6 @@ class PaymentService {
         ...(payment.metadata || {}),
         itemTransactions: result.itemTransactions || [],
       };
-      // Remove the transient checkoutFormToken
       delete updatedMetadata.checkoutFormToken;
 
       const updated = await this._transitionPayment(paymentId, 'AWAITING_FORM', 'AUTHORIZED', {
@@ -181,24 +119,6 @@ class PaymentService {
         providerTxId: result.providerTxId,
       });
       publisher.publish('payment.authorized', this._eventPayload(updated));
-
-      // Save card if iyzico returned card data (user opted in via CF checkbox) — fire-and-forget
-      if (result.cardUserKey && result.cardToken) {
-        try {
-          await this.cardService.saveCardFromPayment({
-            userId: payment.userId,
-            cardUserKey: result.cardUserKey,
-            cardToken: result.cardToken,
-            last4: result.last4,
-            cardAssociation: result.cardAssociation,
-            cardType: result.cardType,
-            cardBankName: result.cardBankName,
-          });
-        } catch (err) {
-          console.warn('Failed to save card after checkout form:', err.message);
-        }
-      }
-
       return { payment: updated };
     }
 

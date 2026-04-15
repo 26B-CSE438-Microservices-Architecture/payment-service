@@ -8,7 +8,7 @@ This document explains how other microservices should integrate with the Payment
 
 | Service | How | What For |
 |---|---|---|
-| **Order Service** | HTTP (REST) | Create payments, capture, void, refund, saved cards |
+| **Order Service** | HTTP (REST) | Create payments, capture, void, refund |
 | **Order Service** | RabbitMQ (consumer) | React to payment state changes |
 | **Auth Service** | JWT (indirect) | Issues JWTs that we validate |
 | **Frontend** (mobile)| HTTP (indirect, via Order Service) | Renders checkout form in iframe/WebView |
@@ -33,43 +33,19 @@ The JWT must be signed with the shared `JWT_SECRET`. We read `sub` from the payl
 
 ## PCI Compliance Note
 
-**Raw card data (cardNumber, CVC, expiry) never flows through our API.** New card payments use iyzico's hosted Checkout Form — the customer enters card details on iyzico's servers. Saved card payments use tokenized `{cardUserKey, cardToken}` pairs. This keeps all services in PCI DSS SAQ A scope.
+**Raw card data (cardNumber, CVC, expiry) never flows through our API.** Every payment uses iyzico's hosted Checkout Form — the customer enters card details on iyzico's servers. This keeps all services in PCI DSS SAQ A scope.
 
 ---
 
-## Flow 1: Saved Card Payment (Direct, NON3D)
+## Card saving — out of scope
 
-```
-Customer          Order Service              Payment API           iyzico
-   |                    |                         |                   |
-   |-- place order ---->|                         |                   |
-   |  (select saved     |-- POST /payments ------>|                   |
-   |   card)            |  (savedCardId, buyer,   |-- preAuth ------->|
-   |                    |   items)                |<-- authorized ----|
-   |                    |                         |                   |
-   |                    |                         |== DB: CREATED → AUTHORIZED ==|
-   |                    |                         |== RMQ: payment.authorized ===|
-   |                    |                         |                   |
-   |                    |<-- 201 { payment } -----|                   |
-   |<-- "authorized" ---|                         |                   |
-   |                    |                         |                   |
-   |  (restaurant       |                         |                   |
-   |   confirms)        |-- POST /capture ------->|                   |
-   |                    |                         |-- postAuth ------>|
-   |                    |                         |<-- captured ------|
-   |                    |                         |                   |
-   |                    |                         |== DB: AUTHORIZED → CAPTURED =|
-   |                    |                         |== RMQ: payment.captured =====|
-   |                    |                         |                   |
-   |                    |<-- 200 { payment } -----|                   |
-   |<-- "confirmed!" ---|                         |                   |
-```
+This service does not support saving cards. Both iyzico paths (standalone Universal Card Storage and the "save card" checkbox inside Checkout Form) are blocked in iyzico sandbox, so we can't test them end-to-end. The feature was cut with the professor's approval. If you need card saving later, prior commits on this branch contain a working implementation that can be revived.
 
-Saved card payments are instant — no form, no redirect.
+Practically: there is no `POST /cards`, no `savedCardId` field on payment requests, no `GET /cards` for the frontend to render a card list. Every payment starts a fresh Checkout Form.
 
 ---
 
-## Flow 2: New Card Payment (Checkout Form)
+## Flow 1: Payment (Checkout Form)
 
 ```
 Customer          Order Service              Payment API           iyzico
@@ -91,7 +67,7 @@ Customer          Order Service              Payment API           iyzico
    |                    |                         |                   |
    | (user fills iyzico's form, iyzico handles 3DS internally)       |
    |                    |                         |                   |
-   |--- POST callbackUrl?token=... ------------->|                   |
+   |--- POST callbackUrl?token=... -------------->|                   |
    |                    |                         |                   |
    | (Order Service receives iyzico's callback POST)                 |
    |                    |-- POST /checkout-form/callback -->|         |
@@ -114,6 +90,23 @@ Customer          Order Service              Payment API           iyzico
 
 ---
 
+## Flow 2: Capture (Restaurant Confirms)
+
+```
+Order Service              Payment API           iyzico
+     |                         |                   |
+     |-- POST /capture ------->|                   |
+     |                         |-- postAuth ------>|
+     |                         |<-- captured ------|
+     |                         |                   |
+     |                         |== DB: AUTHORIZED → CAPTURED =|
+     |                         |== RMQ: payment.captured =====|
+     |                         |                   |
+     |<-- 200 { payment } -----|                   |
+```
+
+---
+
 ## Flow 3: Void (Restaurant Rejects Before Capture)
 
 ```
@@ -123,7 +116,7 @@ Order Service              Payment API           iyzico
      |  { reason }             |-- cancel -------->|
      |                         |<-- success -------|
      |                         |                   |
-     |                         |== DB: AUTHORIZED ��� VOIDED ==|
+     |                         |== DB: AUTHORIZED → VOIDED ==|
      |                         |== RMQ: payment.voided ======|
      |                         |                   |
      |<-- 200 { payment } -----|                   |
@@ -158,7 +151,7 @@ Same endpoint (`POST /cancel`) handles both void and refund. We check the curren
 
 ## HTTP API Reference
 
-### `POST /payments` — Create + Authorize
+### `POST /payments` — Create + Initialize Checkout Form
 
 **Headers:**
 ```
@@ -167,7 +160,7 @@ Content-Type: application/json
 Idempotency-Key: <unique-key-per-attempt>
 ```
 
-**Body (new card — Checkout Form flow, no card data):**
+**Body:**
 ```json
 {
   "orderId": "ord_abc123",
@@ -207,48 +200,15 @@ Idempotency-Key: <unique-key-per-attempt>
 }
 ```
 
-**Body (saved card — direct authorization, no form):**
-```json
-{
-  "orderId": "ord_abc123",
-  "amount": 15000,
-  "currency": "TRY",
-  "paymentMethod": "card",
-  "savedCardId": "card_abc123",
-  "buyer": { ... },
-  "items": [ ... ]
-}
-```
-
 **Notes:**
-- **No `card` field.** New card payments go through the Checkout Form — card details are entered on iyzico's hosted form, not passed through our API.
-- Send `savedCardId` for saved card payments (instant authorization, no form).
-- Omit `savedCardId` for new card payments (triggers Checkout Form flow).
+- **No `card` field.** Card details are entered on iyzico's hosted form, not passed through our API.
 - `amount` is in **minor units** (kurus). 15000 = 150.00 TRY.
 - `items[].price` is in **major units** (TRY) as a string. Sum of item prices must equal `amount / 100`.
 - `buyer` fields are required by iyzico. If fields are missing, we fill defaults but log warnings.
-- `callbackUrl` is required for Checkout Form flow. `{paymentId}` placeholder is replaced by us. Not needed for saved card payments.
+- `callbackUrl` is required. `{paymentId}` placeholder is replaced by us.
 - `Idempotency-Key` must be unique per payment attempt. If you send the same key again, you get back the original response (HTTP 200 instead of 201).
 
-**Response (201 — saved card, authorized directly):**
-```json
-{
-  "payment": {
-    "id": "pay_abc123",
-    "orderId": "ord_abc123",
-    "userId": "user_123",
-    "amount": 15000,
-    "currency": "TRY",
-    "status": "AUTHORIZED",
-    "provider": "iyzico",
-    "providerTxId": "12345678",
-    "createdAt": "...",
-    "authorizedAt": "..."
-  }
-}
-```
-
-**Response (201 — new card, Checkout Form initialized):**
+**Response (201):**
 ```json
 {
   "payment": {
@@ -258,13 +218,13 @@ Idempotency-Key: <unique-key-per-attempt>
   },
   "checkoutForm": {
     "token": "cf_token_abc123",
-    "content": "<base64-encoded HTML>",
+    "content": "<base64-encoded HTML or raw HTML>",
     "paymentPageUrl": "https://sandbox-api.iyzipay.com/..."
   }
 }
 ```
 
-Decode the base64 `content` and render it in the customer's browser (iframe or WebView). This is iyzico's hosted payment form where the customer enters card details securely.
+Render `content` in the customer's browser (iframe or WebView). MockProvider returns base64; iyzico may return raw HTML — try base64-decoding first and fall back to using the content as-is.
 
 **Response (200 — duplicate idempotency key):**
 
@@ -331,108 +291,6 @@ Returns all payment attempts for an order (useful for seeing retries).
 
 ---
 
-## Saved Cards API
-
-Users can save cards for future payments. Card storage uses iyzico's hosted form (PCI-safe) — no raw card data passes through our API.
-
-### `POST /cards` — Initialize Card Storage Form
-
-**Headers:** `Authorization: Bearer <jwt>`
-
-**Body:**
-```json
-{
-  "email": "john@example.com",
-  "cardAlias": "My Visa",
-  "callbackUrl": "https://your-service.com/card-form-return"
-}
-```
-
-- `email` is optional (used by iyzico to create the card user)
-- `cardAlias` is optional (user-friendly name)
-- `callbackUrl` is where iyzico redirects after the user fills the form
-
-**Response (201):**
-```json
-{
-  "cardForm": {
-    "token": "cs_token_abc123",
-    "content": "<base64-encoded HTML>"
-  }
-}
-```
-
-Decode the base64 `content` and render it in an iframe/WebView. The user enters card details on iyzico's form.
-
----
-
-### `POST /cards/checkout-form/callback` — Complete Card Storage
-
-**Headers:** `Authorization: Bearer <jwt>` (required — we need the user ID to store the card)
-
-**Body:**
-```json
-{
-  "token": "cs_token_abc123",
-  "cardAlias": "My Visa"
-}
-```
-
-The `token` comes from iyzico's POST to your `callbackUrl`. Forward it with the user's JWT.
-
-**Response (201):**
-```json
-{
-  "card": {
-    "id": "card_abc123",
-    "userId": "user_42",
-    "last4": "0008",
-    "cardAssociation": "MASTERCARD",
-    "cardType": "CREDIT",
-    "cardBankName": "Halkbank",
-    "cardAlias": "My Visa",
-    "createdAt": "..."
-  }
-}
-```
-
----
-
-### `GET /cards` — List Saved Cards
-
-**Headers:** `Authorization: Bearer <jwt>`
-
-Returns all saved cards for the authenticated user.
-
-**Response (200):**
-```json
-{
-  "cards": [
-    {
-      "id": "card_abc123",
-      "last4": "0008",
-      "cardAssociation": "MASTERCARD",
-      "cardType": "CREDIT",
-      "cardBankName": "Halkbank",
-      "cardAlias": "My Visa",
-      "createdAt": "..."
-    }
-  ]
-}
-```
-
----
-
-### `DELETE /cards/:cardId` — Delete a Saved Card
-
-**Headers:** `Authorization: Bearer <jwt>`
-
-Removes the card from both our database and iyzico's storage. Returns `204 No Content` on success.
-
-Only the card owner can delete their own cards (403 `CARD_NOT_OWNED` otherwise).
-
----
-
 ## RabbitMQ Events
 
 We publish to topic exchange `payment.events`. Subscribe with routing key pattern `payment.#` to get everything, or specific keys like `payment.authorized`.
@@ -452,7 +310,7 @@ Every event has this payload:
 
 | Routing Key | When | What You Should Do |
 |---|---|---|
-| `payment.authorized` | Card auth succeeded (saved card direct or after checkout form) | Update order to "payment received", proceed with fulfillment |
+| `payment.authorized` | Card auth succeeded after checkout form | Update order to "payment received", proceed with fulfillment |
 | `payment.captured` | Funds taken from card | Confirm order to customer |
 | `payment.failed` | Auth failed (declined, form failed, provider error) | Show error to customer, allow retry |
 | `payment.voided` | Authorization released (before capture) | Mark order as cancelled |
@@ -474,16 +332,11 @@ Every event has this payload:
 - Provide `buyer` object with user details (required by iyzico for compliance)
 - Provide `items` array with basket contents (required by iyzico — item prices in TRY as strings, must sum to `amount / 100`)
 - Handle the `callbackUrl` callback for checkout form: receive iyzico's POST with `token`, call our `POST /payments/:id/checkout-form/callback` with `{ "token": "<value>" }`
-- Handle the `callbackUrl` callback for card storage: receive iyzico's POST with `token`, call our `POST /cards/checkout-form/callback` with `{ "token": "<value>" }` and the user's JWT
 - Subscribe to `payment.events` exchange on RabbitMQ and react to state changes
-- For saved cards: proxy `GET /cards`, `POST /cards`, `DELETE /cards/:id` calls from frontend to us
-- At checkout: send `savedCardId` (from GET /cards response) for saved card payments, or omit it for new card checkout form payments
 
 ### From Frontend (mobile team)
-- Render `checkoutForm.content` (base64 decode → iframe or WebView) when payment returns `AWAITING_FORM`
-- Render `cardForm.content` (base64 decode → iframe or WebView) when saving a new card
+- Render `checkoutForm.content` (base64 decode if possible, otherwise use as-is → iframe or WebView) when payment returns `AWAITING_FORM`
 - Never call Payment API directly — always go through Order Service
-- For saved cards: show "My Cards" management UI (list, add, delete) and card selection at checkout
 - **Mobile-specific notes:**
   - `postMessage` from iyzico's iframe doesn't reliably work in native WebViews. Instead, intercept navigation to the `callbackUrl` and extract the `token` from the POST body or URL params.
   - Apple Pay / Google Pay are available in iyzico's checkout form on real devices but won't work in the desktop simulator.
@@ -502,19 +355,13 @@ Every event has this payload:
 |---|---|---|
 | 400 | `MISSING_IDEMPOTENCY_KEY` | `Idempotency-Key` header not sent |
 | 400 | `AMOUNT_MISMATCH` | Capture amount doesn't match authorized amount |
-| 400 | `MISSING_CARD_DETAILS` | Invalid request (e.g., missing required fields) |
 | 400 | `MISSING_FORM_TOKEN` | Checkout form callback missing `token` field |
 | 401 | `UNAUTHORIZED` | Missing/invalid JWT |
-| 403 | `CARD_NOT_OWNED` | Trying to use/delete a saved card that belongs to another user |
 | 404 | `PAYMENT_NOT_FOUND` | Payment ID doesn't exist |
-| 404 | `CARD_NOT_FOUND` | Saved card ID doesn't exist |
 | 409 | `INVALID_STATE_TRANSITION` | Can't perform this action in current state (e.g., capture a failed payment) |
 | 409 | `CONCURRENT_MODIFICATION` | Optimistic lock conflict — someone else modified this payment simultaneously |
 | 502 | `CHECKOUT_FORM_INIT_FAILED` | Failed to initialize checkout form with iyzico |
 | 502 | `CHECKOUT_FORM_RETRIEVE_FAILED` | Failed to retrieve checkout form result from iyzico |
-| 502 | `CARD_STORAGE_INIT_FAILED` | Failed to initialize card storage form with iyzico |
-| 502 | `CARD_STORAGE_RETRIEVE_FAILED` | Failed to retrieve card storage result from iyzico |
-| 502 | `CARD_SAVE_FAILED` | Failed to register card with payment provider |
 
 All errors return:
 ```json
@@ -531,9 +378,8 @@ All errors return:
 ## State Machine
 
 ```
-CREATED → AWAITING_FORM       (new card: checkout form initialized)
-CREATED → AUTHORIZED          (saved card: direct pre-auth succeeded)
-CREATED → FAILED              (declined / error)
+CREATED → AWAITING_FORM       (checkout form initialized)
+CREATED → FAILED              (init error)
 AWAITING_FORM → AUTHORIZED    (checkout form completed successfully)
 AWAITING_FORM → FAILED        (checkout form failed / cancelled)
 AUTHORIZED → CAPTURED         (order service triggers capture)

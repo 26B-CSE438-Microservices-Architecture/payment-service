@@ -105,15 +105,14 @@ function updateOrderFromPayment(orderId, paymentData, httpStatus) {
 // It calls the Payment API on behalf of the customer.
 
 app.post('/api/create-payment', async (req, res) => {
-  const { amount, orderId: existingOrderId, idempotencyKey: existingKey, savedCardId } = req.body;
+  const { amount, orderId: existingOrderId, idempotencyKey: existingKey } = req.body;
 
   const orderId = existingOrderId || `ord_${uuidv4()}`;
   const idempotencyKey = existingKey || `idem_${uuidv4()}`;
   const paymentAmount = amount || 5000;
 
   // The Order Service builds the full payment request.
-  // No card data — new cards go through the Checkout Form (CF).
-  // Saved cards use savedCardId.
+  // No card data — the payment flows through iyzico's hosted Checkout Form.
   const payload = {
     orderId,
     amount: paymentAmount,
@@ -144,10 +143,6 @@ app.post('/api/create-payment', async (req, res) => {
     callbackUrl: `${SELF_URL}/checkout-form-return/{paymentId}`,
   };
 
-  if (savedCardId) {
-    payload.savedCardId = savedCardId;
-  }
-
   try {
     const response = await fetch(`${PAYMENT_API}/payments`, {
       method: 'POST',
@@ -163,7 +158,7 @@ app.post('/api/create-payment', async (req, res) => {
     broadcast({
       type: 'api_call',
       method: 'POST /payments',
-      request: { orderId, amount: paymentAmount, savedCardId: savedCardId || null, idempotencyKey },
+      request: { orderId, amount: paymentAmount, idempotencyKey },
       response: data,
       status: response.status,
       isDuplicate,
@@ -195,7 +190,6 @@ app.post('/api/create-payment', async (req, res) => {
 app.post('/checkout-form-return/:paymentId', async (req, res) => {
   const { paymentId } = req.params;
   const token = req.body.token || req.query.token;
-  console.log('[CF callback]', { paymentId, bodyToken: req.body.token, queryToken: req.query.token, body: req.body });
 
   let result = { status: 'error', message: 'Unknown error' };
 
@@ -255,69 +249,10 @@ if (window.parent !== window) {
 app.get('/checkout-form-return/:paymentId', (req, res) => {
   const { paymentId } = req.params;
   const token = req.query.token;
-  console.log('[CF callback GET]', { paymentId, token });
   res.send(`<!DOCTYPE html><html><body>
 <form id="f" method="POST" action="/checkout-form-return/${paymentId}">
 <input type="hidden" name="token" value="${token || ''}">
 </form><script>document.getElementById('f').submit();</script></body></html>`);
-});
-
-// --- Card Form Return ---
-// After the customer completes the iyzico card storage form,
-// iyzico POSTs back here. We forward to Payment API to finalize.
-
-app.post('/card-form-return', async (req, res) => {
-  const { token } = req.body;
-
-  let result = { status: 'error', message: 'Unknown error' };
-
-  try {
-    const response = await fetch(`${PAYMENT_API}/cards/checkout-form/callback`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ token }),
-    });
-    const data = await response.json();
-
-    broadcast({
-      type: 'api_call',
-      method: 'POST /cards/checkout-form/callback',
-      response: data,
-      status: response.status,
-    });
-
-    result = {
-      status: data.card ? 'success' : 'failure',
-      card: data.card || null,
-      message: data.card ? 'Card saved successfully' : (data.error?.message || 'Card storage failed'),
-    };
-  } catch (err) {
-    result = { status: 'error', message: err.message };
-  }
-
-  res.send(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,sans-serif;background:#f0f4f8;display:flex;justify-content:center;align-items:center;min-height:100vh}
-.card{background:#fff;border-radius:12px;padding:32px;width:400px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
-.icon{font-size:48px;margin-bottom:12px}
-h2{margin-bottom:8px;font-size:20px}
-p{color:#64748b;font-size:14px;margin-bottom:20px}
-a{display:inline-block;padding:10px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:600}
-a:hover{background:#1d4ed8}
-</style></head><body>
-<div class="card">
-<div class="icon">${result.status === 'success' ? '&#10003;' : '&#10007;'}</div>
-<h2>${result.status === 'success' ? 'Card Saved' : 'Card Save Failed'}</h2>
-<p>${result.message}</p>
-<a href="/">Back to Checkout</a>
-</div>
-<script>
-if (window.parent !== window) {
-  window.parent.postMessage(${JSON.stringify(result)}, '*');
-}
-</script>
-</body></html>`);
 });
 
 // --- API: Capture ---
@@ -451,57 +386,6 @@ app.get('/api/orders', (req, res) => {
     (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
   );
   res.json({ orders: orderList });
-});
-
-// --- API: Saved Cards ---
-
-app.post('/api/cards', async (req, res) => {
-  try {
-    const { email, cardAlias } = req.body;
-    const response = await fetch(`${PAYMENT_API}/cards`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        email: email || 'test@example.com',
-        cardAlias: cardAlias || 'My Card',
-        callbackUrl: `${SELF_URL}/card-form-return`,
-      }),
-    });
-    const data = await response.json();
-    broadcast({ type: 'api_call', method: 'POST /cards', response: data, status: response.status });
-    res.status(response.status).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/cards', async (req, res) => {
-  try {
-    const response = await fetch(`${PAYMENT_API}/cards`, {
-      headers: { Authorization: `Bearer ${generateAuthToken('sim_user_1')}` },
-    });
-    const data = await response.json();
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/cards/:cardId', async (req, res) => {
-  try {
-    const response = await fetch(`${PAYMENT_API}/cards/${req.params.cardId}`, {
-      method: 'DELETE',
-      headers: { Authorization: `Bearer ${generateAuthToken('sim_user_1')}` },
-    });
-    if (response.status === 204) {
-      broadcast({ type: 'api_call', method: `DELETE /cards/${req.params.cardId}`, status: 204 });
-      return res.status(204).send();
-    }
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // --- RabbitMQ subscriber ---

@@ -14,7 +14,7 @@ function setup(service) {
 // POST /payments — create + authorize (saved card) or init checkout form (new card)
 router.post('/', authMiddleware, idempotencyMiddleware, async (req, res, next) => {
   try {
-    const { orderId, amount, currency, paymentMethod, buyer, items, callbackUrl, savedCardId } = req.body;
+    const { orderId, amount, currency, paymentMethod, buyer, items, callbackUrl } = req.body;
 
     const result = await paymentService.createPayment({
       idempotencyKey: req.idempotencyKey,
@@ -26,7 +26,6 @@ router.post('/', authMiddleware, idempotencyMiddleware, async (req, res, next) =
       buyer,
       items,
       callbackUrl,
-      savedCardId,
     });
 
     const response = { payment: result.payment };
