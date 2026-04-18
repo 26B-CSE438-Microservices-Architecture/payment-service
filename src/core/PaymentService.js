@@ -7,6 +7,7 @@ const publisher = require('../queue/publisher');
 class PaymentService {
   constructor(provider) {
     this.provider = provider;
+    this.maxProviderRetries = 1;
   }
 
   async createPayment({ idempotencyKey, orderId, userId, amount, currency, paymentMethod, buyer, items, callbackUrl: inputCallbackUrl }) {
@@ -33,20 +34,35 @@ class PaymentService {
     if (buyer) metadata.buyer = buyer;
     if (items) metadata.items = items;
 
-    const payment = await prisma.payment.create({
-      data: {
-        id: paymentId,
-        idempotencyKey,
-        orderId,
-        userId,
-        amount,
-        currency: currency || 'TRY',
-        method: paymentMethod || 'card',
-        status: 'CREATED',
-        provider: config.paymentProvider,
-        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-      },
-    });
+    let payment;
+    try {
+      payment = await prisma.payment.create({
+        data: {
+          id: paymentId,
+          idempotencyKey,
+          orderId,
+          userId,
+          amount,
+          currency: currency || 'TRY',
+          method: paymentMethod || 'card',
+          status: 'CREATED',
+          provider: config.paymentProvider,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        },
+      });
+    } catch (err) {
+      // If two requests race with the same idempotency key, treat unique conflict as replay.
+      if (err && err.code === 'P2002') {
+        const duplicate = await prisma.payment.findUnique({
+          where: { idempotencyKey },
+          include: { events: true },
+        });
+        if (duplicate) {
+          return { payment: duplicate, duplicate: true };
+        }
+      }
+      throw err;
+    }
 
     // 4. Initialize Checkout Form
     let callbackUrl;
@@ -58,14 +74,17 @@ class PaymentService {
 
     let formResult;
     try {
-      formResult = await this.provider.initCheckoutForm({
-        paymentId: payment.id,
-        amount,
-        currency: currency || 'TRY',
-        buyer,
-        items,
-        callbackUrl,
-      });
+      formResult = await this._callProviderWithRetry(
+        () => this.provider.initCheckoutForm({
+          paymentId: payment.id,
+          amount,
+          currency: currency || 'TRY',
+          buyer,
+          items,
+          callbackUrl,
+        }),
+        this.maxProviderRetries,
+      );
     } catch (err) {
       const updated = await this._transitionPayment(payment.id, 'CREATED', 'FAILED', {
         failureReason: err.message,
@@ -279,6 +298,31 @@ class PaymentService {
       status: payment.status,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  async _callProviderWithRetry(fn, maxRetries = 1) {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (attempt >= maxRetries || !this._isRetryableProviderError(err)) {
+          throw err;
+        }
+        attempt += 1;
+      }
+    }
+  }
+
+  _isRetryableProviderError(err) {
+    if (!err) return false;
+    const code = String(err.code || '').toUpperCase();
+    const message = String(err.message || '').toLowerCase();
+
+    const retryableCodes = ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'ENOTFOUND', 'ECONNABORTED'];
+    if (retryableCodes.includes(code)) return true;
+
+    return message.includes('timeout') || message.includes('timed out') || message.includes('socket hang up');
   }
 }
 

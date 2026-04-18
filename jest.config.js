@@ -2,6 +2,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.js'],
+  testPathIgnorePatterns: ['<rootDir>/tests/integration/'],
   modulePathIgnorePatterns: ['node_modules', 'prisma'],
   setupFiles: ['<rootDir>/tests/setup.js'],
   // uuid v13+ ships ESM-only — map it to our CJS-compatible mock

@@ -163,6 +163,51 @@ describe('PaymentService', () => {
       );
     });
 
+    it('retries initCheckoutForm once on transient timeout and then succeeds', async () => {
+      prisma.payment.findUnique.mockResolvedValueOnce(null);
+      prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.payment.create.mockResolvedValue({ ...baseFakePayment });
+
+      const timeoutErr = new Error('socket timeout from provider');
+      timeoutErr.code = 'ETIMEDOUT';
+      mockProvider.initCheckoutForm
+        .mockRejectedValueOnce(timeoutErr)
+        .mockResolvedValueOnce({
+          token: 'cf_tok_retry',
+          content: 'base64html',
+          paymentPageUrl: null,
+        });
+
+      prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+      prisma.payment.findUnique.mockResolvedValueOnce({ ...baseFakePayment, status: 'AWAITING_FORM' });
+      prisma.paymentEvent.create.mockResolvedValue({});
+
+      const result = await service.createPayment(createArgs);
+
+      expect(result.payment.status).toBe('AWAITING_FORM');
+      expect(mockProvider.initCheckoutForm).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry initCheckoutForm on non-retryable errors', async () => {
+      prisma.payment.findUnique.mockResolvedValueOnce(null);
+      prisma.payment.findFirst.mockResolvedValue(null);
+      prisma.payment.create.mockResolvedValue({ ...baseFakePayment });
+
+      mockProvider.initCheckoutForm.mockRejectedValue(new Error('invalid request payload'));
+
+      prisma.payment.updateMany.mockResolvedValue({ count: 1 });
+      prisma.payment.findUnique.mockResolvedValueOnce({
+        ...baseFakePayment,
+        status: 'FAILED',
+        failureReason: 'invalid request payload',
+      });
+      prisma.paymentEvent.create.mockResolvedValue({});
+
+      await service.createPayment(createArgs);
+
+      expect(mockProvider.initCheckoutForm).toHaveBeenCalledTimes(1);
+    });
+
     it('logs a PaymentEvent for CREATED→AWAITING_FORM transition', async () => {
       prisma.payment.findUnique.mockResolvedValueOnce(null);
       prisma.payment.findFirst.mockResolvedValue(null);
@@ -406,6 +451,7 @@ describe('PaymentService', () => {
         currency: 'TRY',
       });
     });
+
 
     it('throws AMOUNT_MISMATCH (400) if amount is provided and does not match', async () => {
       prisma.payment.findUnique.mockResolvedValueOnce(authorizedPayment);

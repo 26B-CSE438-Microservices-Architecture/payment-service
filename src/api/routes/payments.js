@@ -42,7 +42,7 @@ router.post('/', authMiddleware, idempotencyMiddleware, async (req, res, next) =
 // POST /payments/:paymentId/capture
 router.post('/:paymentId/capture', authMiddleware, async (req, res, next) => {
   try {
-    const { amount } = req.body;
+    const { amount } = req.body || {};
     const result = await paymentService.capturePayment(req.params.paymentId, { amount });
     res.json({ payment: result.payment });
   } catch (err) {
@@ -53,7 +53,7 @@ router.post('/:paymentId/capture', authMiddleware, async (req, res, next) => {
 // POST /payments/:paymentId/cancel
 router.post('/:paymentId/cancel', authMiddleware, async (req, res, next) => {
   try {
-    const { reason } = req.body;
+    const { reason } = req.body || {};
     const result = await paymentService.cancelPayment(req.params.paymentId, { reason });
     res.json({ payment: result.payment });
   } catch (err) {
