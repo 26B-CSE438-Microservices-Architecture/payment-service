@@ -13,8 +13,9 @@ jobs:
         run: |
           cd /home/cse438/trendyol-clone/repos/payment-service
           git fetch origin
+          git checkout main
           git pull origin main
       - name: Docker Build and Up
         run: |
           cd /home/cse438/trendyol-clone
-          docker-compose up -d --build payment-service
+          docker compose up -d --build payment-service
