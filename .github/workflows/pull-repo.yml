@@ -1,0 +1,21 @@
+name: Pull Latest Code
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  pull-code:
+    runs-on: self-hosted
+    steps:
+      - name: Git Fetch and Pull
+        run: |
+          cd /home/cse438/trendyol-clone/repos/payment-service
+          git fetch origin
+          git checkout main
+          git pull origin main
+      - name: Docker Build and Up
+        run: |
+          cd /home/cse438/trendyol-clone
+          docker compose up -d --build payment-service
