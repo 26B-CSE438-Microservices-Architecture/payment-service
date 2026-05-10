@@ -33,6 +33,7 @@
     "express": "^5.2.1",
     "iyzipay": "^2.0.65",
     "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

@@ -13,6 +13,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Initialize provider and services
 const provider = createProvider();
